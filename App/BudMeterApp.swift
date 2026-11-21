@@ -21,10 +21,43 @@ struct BudMeterApp: App {
             DashboardView().environment(monitor)
         }
         .defaultSize(width: 1000, height: 780)
+        .commands {
+            // ⌘Q closes the dashboard; quitting for real happens from the menu bar icon.
+            CommandGroup(replacing: .appTermination) {
+                Button("Close Dashboard") { AppDelegate.closeDashboard() }
+                    .keyboardShortcut("q")
+            }
+        }
     }
 }
 
+/// BudMeter lives in the menu bar. It shows in the Dock only while the dashboard is open, and quitting
+/// from the Dock or with ⌘Q just closes the dashboard. Only the Quit button in the menu bar icon (or
+/// logging out / shutting down) really quits.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by the menu bar's Quit button.
+    static var allowQuit = false
+
+    static func quit() {
+        allowQuit = true
+        NSApp.terminate(nil)
+    }
+
+    static func closeDashboard() {
+        for window in NSApp.windows where window.identifier?.rawValue.hasPrefix("dashboard") == true {
+            window.close()
+        }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Logout, restart and shutdown send a quit event with a reason; let those through.
+        let systemQuit = NSAppleEventManager.shared().currentAppleEvent?
+            .attributeDescriptor(forKeyword: kAEQuitReason) != nil
+        if Self.allowQuit || systemQuit { return .terminateNow }
+        Self.closeDashboard()
+        return .terminateCancel
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Show the dashboard once on first launch so it's clear where the app lives.
         if !UserDefaults.standard.bool(forKey: "launchedBefore") {

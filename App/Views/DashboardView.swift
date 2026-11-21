@@ -30,7 +30,13 @@ struct DashboardView: View {
                                        description: Text("Connect a pair to your Mac. BudMeter records battery levels in the background."))
             }
         }
-        .onAppear { selectDefault() }
+        .onAppear {
+            selectDefault()
+            // Show in the Dock while the dashboard is open.
+            NSApp.setActivationPolicy(.regular)
+            DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
+        }
+        .onDisappear { NSApp.setActivationPolicy(.accessory) }
         .onChange(of: monitor.reports.map(\.device.address)) { selectDefault() }
         .onChange(of: selection) { selectDefault() }
         .frame(minWidth: 820, minHeight: 600)

@@ -82,7 +82,7 @@ struct MenuView: View {
                         }
                     }
                 Button {
-                    NSApp.terminate(nil)
+                    AppDelegate.quit()
                 } label: {
                     Image(systemName: "power")
                 }
