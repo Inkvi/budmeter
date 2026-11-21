@@ -177,9 +177,9 @@ extension DeviceReport {
 
         // Time left now: whichever battery runs out first at its own rate.
         var remaining: Double?
-        if isConnected, let latest, latest.inCase != true {
+        if isConnected, let latest {
             remaining = displayChannels(latest).compactMap { ch -> Double? in
-                guard let level = latest.value(ch) else { return nil }
+                guard let level = latest.value(ch), !latest.isInCase(ch) else { return nil }
                 // Skip a bud that is charging (level went up since its previous reading).
                 if let previous = samples.dropLast().last(where: { $0.value(ch) != nil })?.value(ch),
                    level > previous { return nil }

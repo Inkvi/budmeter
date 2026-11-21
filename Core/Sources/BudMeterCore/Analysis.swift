@@ -74,7 +74,7 @@ public enum Analysis {
     /// keeps step size from skewing the rate, and it drops flat time in the charging case.
     ///
     /// A run ends on: a new session (disconnect, sleep, restart) or a gap, a rise in level
-    /// (charging), both buds in the case, or an implausible jump. A sample without a value for this
+    /// (charging), this bud going into the case, or an implausible jump. A sample without a value for this
     /// battery is skipped, not a break: headsets sometimes report nothing for a moment.
     ///
     /// Each step-to-step span is one measurement: we know its total drop, not when inside it the
@@ -97,7 +97,7 @@ public enum Analysis {
         }
 
         for sample in samples {
-            if sample.inCase == true {
+            if sample.isInCase(channel) {
                 flush()
                 continue
             }
@@ -175,7 +175,7 @@ public enum Analysis {
         var out: [(Date, UsageState, Double)] = []
         var previous: (time: Date, value: Int, state: UsageState)?
         for sample in samples {
-            if sample.inCase == true {
+            if sample.isInCase(channel) {
                 previous = nil
                 continue
             }
@@ -194,11 +194,14 @@ public enum Analysis {
     }
 
     /// Hours spent connected in each state. Time in the charging case is left out: when the earbuds
-    /// say both buds are in the case, or when a battery is charging and none is draining.
+    /// say both buds are in the case, or, for earbuds that don't report where the buds are, when a
+    /// battery is charging and none is draining.
     public static func connectedHours(_ samples: [Sample]) -> [UsageState: Double] {
         var out: [UsageState: Double] = [:]
         for (a, b) in zip(samples, samples.dropFirst()) {
-            guard continues(from: a.time, to: b), a.inCase != true, !isCharging(from: a, to: b) else { continue }
+            let knowsPlacement = a.placementLeft != nil || a.placementRight != nil
+            guard continues(from: a.time, to: b), a.inCase != true,
+                  knowsPlacement || !isCharging(from: a, to: b) else { continue }
             out[a.state, default: 0] += b.time.timeIntervalSince(a.time) / 3600
         }
         return out

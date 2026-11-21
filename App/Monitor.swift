@@ -20,6 +20,10 @@ actor ReportBuilder {
                                    connected: connected.contains(device.address), now: now)
             }
     }
+
+    func samples(address: String, since: Date) throws -> [Sample] {
+        try store.samples(address: address, since: since)
+    }
 }
 
 /// Polls connected earbuds, records battery samples and keeps reports up to date.
@@ -50,8 +54,10 @@ final class Monitor {
     /// a new session (after a connect, wake or app start).
     @ObservationIgnored private var lastWritten: [String: Sample] = [:]
     /// Latest reading that was not stored yet (unchanged since last write). Stored when the session
-    /// ends so its end is exact. Removed only once it is saved.
+    /// ends so its end is exact.
     @ObservationIgnored private var pending: [String: Sample] = [:]
+    /// Readings that failed to save; retried on every poll, before new ones.
+    @ObservationIgnored private var unsaved = UnsavedSamples()
     @ObservationIgnored private var connectedNow = Set<String>()
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var refreshTimer: Timer?
@@ -106,6 +112,15 @@ final class Monitor {
         guard let store else { return }
         let now = Date()
         var changed = Set<String>()
+        let retryError = unsaved.retry { item in
+            if let device = item.device {
+                try store.record(item.sample, name: device.name, productID: device.productID)
+            } else {
+                try store.insert(item.sample)
+            }
+            changed.insert(item.sample.address)
+        }
+        if let retryError { errorMessage = "Could not save \(unsaved.items.count) readings: \(retryError)" }
         var live = Bluetooth.scan()
         for i in live.indices where live[i].isConnected && GalaxyBuds.isGalaxyBuds(name: live[i].name) {
             guard galaxyDetail else { continue }
@@ -116,6 +131,8 @@ final class Monitor {
                 live[i].caseLevel = status.caseLevel
                 live[i].wearing = status.wearing
                 live[i].inCase = status.inCase
+                live[i].placementLeft = status.placementLeft
+                live[i].placementRight = status.placementRight
             }
         }
 
@@ -125,19 +142,25 @@ final class Monitor {
             let last = lastWritten[device.address]
             let sample = Sample(time: now, address: device.address, main: device.main, left: device.left,
                                 right: device.right, caseLevel: device.caseLevel, state: state,
-                                wearing: device.wearing, inCase: device.inCase, sessionStart: last == nil)
+                                wearing: device.wearing, inCase: device.inCase, sessionStart: last == nil,
+                                placementLeft: device.placementLeft, placementRight: device.placementRight)
             if let last, !sample.differs(from: last), now.timeIntervalSince(last.time) < heartbeat {
                 pending[device.address] = sample
                 continue
             }
-            do {
-                try store.record(sample, name: device.name, productID: device.productID)
-                lastWritten[device.address] = sample
-                pending[device.address] = nil
-                changed.insert(device.address)
-            } catch {
-                errorMessage = "Could not save a reading: \(error)"
+            if unsaved.items.isEmpty {
+                do {
+                    try store.record(sample, name: device.name, productID: device.productID)
+                    changed.insert(device.address)
+                } catch {
+                    unsaved.add(.init(sample, device: (device.name, device.productID)))
+                    errorMessage = "Could not save a reading: \(error)"
+                }
+            } else {
+                unsaved.add(.init(sample, device: (device.name, device.productID)))   // older readings wait first
             }
+            lastWritten[device.address] = sample
+            pending[device.address] = nil
         }
 
         // Devices that disconnected: end their session.
@@ -166,22 +189,32 @@ final class Monitor {
     /// Rebuild everything, for example when the dashboard opens.
     func refreshAll() { refresh(nil) }
 
-    /// Samples for the battery history chart.
-    func samples(for address: String, since: Date) -> [Sample] {
-        (try? store?.samples(address: address, since: since)) ?? []
+    /// Samples for the battery history chart, read off the main thread.
+    func samples(for address: String, since: Date) async -> [Sample] {
+        guard let builder else { return [] }
+        do {
+            return try await builder.samples(address: address, since: since)
+        } catch {
+            errorMessage = "Could not read history: \(error)"
+            return []
+        }
     }
 
     // MARK: Sessions
 
-    /// Stores the session's last reading (if not stored yet) and makes the next reading start a new session.
+    /// Stores the session's last reading (if not stored yet) and makes the next reading start a new
+    /// session. A reading that fails to save is queued and retried, even after a reconnect.
     private func endSession(_ address: String) {
-        if let sample = pending[address] {
-            do {
-                try store?.insert(sample)
-                pending[address] = nil
-            } catch {
-                errorMessage = "Could not save the last reading: \(error)"
-                return  // keep it pending and try again on the next poll
+        if let sample = pending.removeValue(forKey: address) {
+            if !unsaved.items.isEmpty {
+                unsaved.add(.init(sample))
+            } else {
+                do {
+                    try store?.insert(sample)
+                } catch {
+                    unsaved.add(.init(sample))
+                    errorMessage = "Could not save the last reading: \(error)"
+                }
             }
         }
         lastWritten[address] = nil

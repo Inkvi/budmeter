@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import BudMeterCore
 
@@ -484,4 +485,93 @@ private func s(_ t: Date, main: Int? = nil, left: Int? = nil, right: Int? = nil,
     try store.insert(b)
     #expect(try store.samples(address: "x") == [a, b])
     #expect(try store.devices().first?.name == "Buds")
+}
+
+@Test func oneBudInTheCaseStopsOnlyThatBud() {
+    // Both buds listening; after an hour the right bud goes into the case (flat at first, then
+    // charging) while the left bud keeps playing for another hour.
+    var samples: [Sample] = []
+    let t0 = Date(timeIntervalSince1970: 1_750_000_000)
+    for i in 0..<30 {
+        samples.append(Sample(time: t0 + Double(i) * 120, address: "x", left: 90 - i / 2, right: 90 - i / 2,
+                              state: .listening, placementLeft: 1, placementRight: 1))
+    }
+    for i in 30..<60 {
+        let right = i < 45 ? 75 : 75 + (i - 45)   // flat in the case for 30 min, then charging
+        samples.append(Sample(time: t0 + Double(i) * 120, address: "x", left: 90 - i / 2, right: right,
+                              state: .listening, placementLeft: 1, placementRight: 3))
+    }
+    let right = Analysis.drain(Analysis.intervals(samples, channel: .right))[.listening]!
+    let left = Analysis.drain(Analysis.intervals(samples, channel: .left))[.listening]!
+    #expect(right.hours < 1.0)          // the flat time in the case isn't counted as drain
+    #expect(abs(right.ratePerHour! - 15) < 1.5)
+    #expect(left.hours > 1.8)           // the left bud keeps its whole run
+    // Connected time keeps counting while one bud is still in use.
+    #expect(abs(Analysis.connectedHours(samples)[.listening]! - 59.0 * 2 / 60) < 0.05)
+    // Time left comes from the bud in the ear even though the cased one reads lower.
+    let rep = DeviceReport.build(device: device("Galaxy Buds3 Pro"), samples: samples, now: samples.last!.time)
+    let leftLevel = Double(samples.last!.left!)
+    #expect(abs(rep.remainingHours! - leftLevel / 15) < 0.5)
+}
+
+@Test func storeKeepsPlacements() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite").path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let store = try Store(path: path)
+    let s = Sample(time: Date(timeIntervalSince1970: 1), address: "a", left: 50, right: 60, state: .idle,
+                   placementLeft: 1, placementRight: 3)
+    try store.insert(s)
+    #expect(try store.samples(address: "a") == [s])
+    #expect(s.isInCase(.right) && !s.isInCase(.left) && s.isInCase(.main))
+}
+
+@Test func unsavedReadingsAreRetriedInOrder() {
+    struct Failure: Error {}
+    var queue = UnsavedSamples(limit: 3)
+    let t0 = Date(timeIntervalSince1970: 1)
+    for i in 0..<4 { queue.add(.init(Sample(time: t0 + Double(i), address: "x", main: 50, state: .idle))) }
+    #expect(queue.items.count == 3)   // the oldest one is dropped past the limit
+
+    var saved: [Date] = []
+    var failNext = true
+    let error = queue.retry { sample in
+        if failNext { failNext = false; throw Failure() }
+        saved.append(sample.sample.time)
+    }
+    #expect(error != nil && saved.isEmpty && queue.items.count == 3)   // nothing lost on failure
+
+    #expect(queue.retry { saved.append($0.sample.time) } == nil)
+    #expect(saved == [t0 + 1, t0 + 2, t0 + 3] && queue.items.isEmpty)
+}
+
+@Test func queuedReadingsSurviveALockedDatabase() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite").path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let store = try Store(path: path)
+    // Another connection takes an exclusive lock, so writes fail with "database is locked".
+    var other: OpaquePointer?
+    sqlite3_open(path, &other)
+    defer { sqlite3_close(other) }
+    #expect(sqlite3_exec(other, "BEGIN EXCLUSIVE", nil, nil, nil) == SQLITE_OK)
+
+    var queue = UnsavedSamples()
+    let first = Sample(time: Date(timeIntervalSince1970: 1), address: "x", main: 80, state: .idle)
+    let second = Sample(time: Date(timeIntervalSince1970: 2), address: "x", main: 79, state: .idle, sessionStart: true)
+    #expect(throws: (any Error).self) { try store.insert(first) }
+    queue.add(.init(first, device: (name: "Galaxy Buds2 Pro", productID: nil)))   // a failed first reading
+    queue.add(.init(second))
+    let save = { (item: UnsavedSamples.Item) in
+        if let device = item.device {
+            try store.record(item.sample, name: device.name, productID: device.productID)
+        } else {
+            try store.insert(item.sample)
+        }
+    }
+    #expect(queue.retry(save) != nil)
+    #expect(queue.items.count == 2)
+
+    sqlite3_exec(other, "ROLLBACK", nil, nil, nil)
+    #expect(queue.retry(save) == nil)
+    #expect(try store.samples(address: "x") == [first, second])
+    #expect(try store.devices().map(\.name) == ["Galaxy Buds2 Pro"])   // the device row came back too
 }

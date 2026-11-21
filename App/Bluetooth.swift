@@ -16,6 +16,8 @@ struct LiveDevice {
     var inputRunning: Bool
     var wearing: Bool?
     var inCase: Bool?
+    var placementLeft: Int?
+    var placementRight: Int?
 
     var hasBattery: Bool { main != nil || left != nil || right != nil }
 }

@@ -46,10 +46,13 @@ public struct Sample: Sendable, Equatable {
     public var inCase: Bool?
     /// First reading after a connect, wake or app start. Nothing before it continues into it.
     public var sessionStart: Bool
+    /// Where each bud is (Galaxy Buds only): 0 not connected, 1 in ear, 2 out of ear, 3 or 4 in the case.
+    public var placementLeft: Int?
+    public var placementRight: Int?
 
     public init(time: Date, address: String, main: Int? = nil, left: Int? = nil, right: Int? = nil,
                 caseLevel: Int? = nil, state: UsageState, wearing: Bool? = nil, inCase: Bool? = nil,
-                sessionStart: Bool = false) {
+                sessionStart: Bool = false, placementLeft: Int? = nil, placementRight: Int? = nil) {
         self.time = time
         self.address = address
         self.main = main
@@ -60,6 +63,19 @@ public struct Sample: Sendable, Equatable {
         self.wearing = wearing
         self.inCase = inCase
         self.sessionStart = sessionStart
+        self.placementLeft = placementLeft
+        self.placementRight = placementRight
+    }
+
+    /// This battery is in the charging case. Uses each bud's own placement when known, otherwise the
+    /// pair-level flag. The pair-level battery counts as in the case when either bud is.
+    public func isInCase(_ channel: Channel) -> Bool {
+        func cased(_ p: Int?) -> Bool { (p ?? 0) >= 3 }
+        switch channel {
+        case .left: return placementLeft.map { $0 >= 3 } ?? (inCase == true)
+        case .right: return placementRight.map { $0 >= 3 } ?? (inCase == true)
+        case .main: return inCase == true || cased(placementLeft) || cased(placementRight)
+        }
     }
 
     public func value(_ channel: Channel) -> Int? {
@@ -74,7 +90,8 @@ public struct Sample: Sendable, Equatable {
     public func differs(from other: Sample) -> Bool {
         main != other.main || left != other.left || right != other.right
             || caseLevel != other.caseLevel || state != other.state || wearing != other.wearing
-            || inCase != other.inCase
+            || inCase != other.inCase || placementLeft != other.placementLeft
+            || placementRight != other.placementRight
     }
 }
 

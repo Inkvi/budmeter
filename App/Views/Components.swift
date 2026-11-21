@@ -126,6 +126,7 @@ struct BatteryBar: View {
 struct BatteryRow: View {
     let label: String
     let level: Int
+    var inCase = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -137,6 +138,11 @@ struct BatteryRow: View {
             Text("\(level)%")
                 .font(.caption.monospacedDigit())
                 .frame(width: 36, alignment: .trailing)
+            Image(systemName: "bolt.fill")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .opacity(inCase ? 1 : 0)
+                .help("In the case")
         }
     }
 }
@@ -149,7 +155,7 @@ struct BatteryRows: View {
         if let latest = report.latest {
             VStack(spacing: 6) {
                 ForEach(report.levels, id: \.channel) { item in
-                    BatteryRow(label: item.channel.label, level: item.level)
+                    BatteryRow(label: item.channel.label, level: item.level, inCase: latest.isInCase(item.channel))
                 }
                 if let level = latest.caseLevel {
                     BatteryRow(label: "Case", level: level)

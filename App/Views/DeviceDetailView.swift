@@ -429,7 +429,8 @@ private struct HistorySection: View {
         .task(id: "\(range)-\(report.latest?.time.timeIntervalSince1970 ?? 0)") {
             // The window ends at the last reading, so pairs not used today still show their latest use.
             let end = report.latest?.time ?? Date()
-            samples = monitor.samples(for: report.device.address, since: end.addingTimeInterval(-Double(range) * 86400))
+            let loaded = await monitor.samples(for: report.device.address, since: end.addingTimeInterval(-Double(range) * 86400))
+            if !Task.isCancelled { samples = loaded }   // a newer range may have replaced this load
         }
     }
 
