@@ -34,6 +34,15 @@ extension UsageState {
         }
     }
 
+    /// Height of this activity in the battery chart's activity strip (in battery-scale points).
+    var stripHeight: Int {
+        switch self {
+        case .call: 13
+        case .listening: 8
+        case .idle: 3
+        }
+    }
+
     var symbol: String {
         switch self {
         case .call: "phone.fill"
@@ -62,6 +71,18 @@ extension DeviceReport.Verdict {
         }
     }
 
+    /// For text. System green, orange and red are too light for text on light backgrounds (about 2:1),
+    /// so text uses darker variants in light mode and lighter ones in dark mode, all 4.6:1 or better
+    /// on cards and on the pill tint. Fills such as the ring and dots keep `color`.
+    var textColor: Color {
+        switch self {
+        case .good: Color(light: 0x1E7B34, dark: 0x4ADE80)
+        case .worn: Color(light: 0xA64A00, dark: 0xFFB86B)
+        case .replace: Color(light: 0xC0281C, dark: 0xFFA099)
+        case .collecting, .unknownRating: .secondaryText
+        }
+    }
+
     var symbol: String {
         switch self {
         case .good: "checkmark.seal.fill"
@@ -86,7 +107,7 @@ struct VerdictPill: View {
             }
         }
         .font(.caption.weight(.semibold))
-        .foregroundStyle(report.verdict.color)
+        .foregroundStyle(report.verdict.textColor)
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(report.verdict.color.opacity(0.12), in: Capsule())
@@ -97,9 +118,13 @@ struct StateChip: View {
     let state: UsageState
 
     var body: some View {
-        Label(state.liveLabel, systemImage: state.symbol)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(state.color)
+        // Colored icon, secondary text: blue and orange text would be under 3.5:1 on light backgrounds.
+        Label {
+            Text(state.liveLabel).foregroundStyle(Color.secondaryText)
+        } icon: {
+            Image(systemName: state.symbol).foregroundStyle(state.color)
+        }
+        .font(.caption.weight(.medium))
     }
 }
 
@@ -115,7 +140,7 @@ struct BatteryBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary)
                 Capsule().fill(color.gradient)
-                    .frame(width: max(geo.size.width * CGFloat(level) / 100, 4))
+                    .frame(width: level > 0 ? max(geo.size.width * CGFloat(level) / 100, 4) : 0)
             }
         }
         .frame(height: 6)
@@ -132,7 +157,7 @@ struct BatteryRow: View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
                 .frame(width: 52, alignment: .leading)
             BatteryBar(level: level)
             Text("\(level)%")
@@ -140,7 +165,7 @@ struct BatteryRow: View {
                 .frame(width: 36, alignment: .trailing)
             Image(systemName: "bolt.fill")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
                 .opacity(inCase ? 1 : 0)
                 .help("In the case")
         }
@@ -169,16 +194,48 @@ struct BatteryRows: View {
 struct DeviceImage: View {
     let device: Device
     var size: CGFloat = 32
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        // A soft tile keeps white earbuds visible on light backgrounds.
+        // The tile has its own gradient and a hairline edge, so it stays visible on the sidebar, a gray
+        // or blue selection, and in dark mode, and white earbuds keep their shading against it.
+        let shape = RoundedRectangle(cornerRadius: size * 0.24)
+        let colors: [Color] = colorScheme == .dark
+            ? [Color(white: 0.30), Color(white: 0.18)]
+            : [Color(white: 0.97), Color(white: 0.84)]
         Image(device.model.imageName)
             .resizable()
             .interpolation(.high)
             .scaledToFit()
             .padding(size * 0.12)
             .frame(width: size, height: size)
-            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: size * 0.24))
+            .background(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom), in: shape)
+            .overlay(shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
             .accessibilityHidden(true)
     }
+}
+
+extension Color {
+    /// A color with separate light and dark appearance values, given as 0xRRGGBB.
+    init(light: Int, dark: Int) {
+        func ns(_ hex: Int) -> NSColor {
+            NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
+                    blue: CGFloat(hex & 255) / 255, alpha: 1)
+        }
+        self.init(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? ns(dark) : ns(light)
+        })
+    }
+}
+
+extension Color {
+    /// Secondary text for small labels. The system secondary label is about 3.9:1 on light cards;
+    /// this is 5.6:1 in light mode (darker still with Increase Contrast) and the system color in dark.
+    static let secondaryText = Color(nsColor: NSColor(name: nil) { appearance in
+        switch appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]) {
+        case .aqua: NSColor(white: 0.40, alpha: 1)
+        case .accessibilityHighContrastAqua: NSColor(white: 0.28, alpha: 1)
+        default: .secondaryLabelColor
+        }
+    })
 }

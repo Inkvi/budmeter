@@ -13,9 +13,15 @@ struct DashboardView: View {
                         .opacity(report.isConnected ? 1 : 0.75)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(report.device.name).lineLimit(1)
-                        Text(sidebarSubtitle(report))
-                            .font(.caption)
-                            .foregroundStyle(report.health == nil ? .secondary : report.verdict.color)
+                        // Secondary text adapts to the selection highlight; the dot carries the verdict color.
+                        HStack(spacing: 5) {
+                            if report.health != nil && !report.isConnected {
+                                Circle().fill(report.verdict.color).frame(width: 7, height: 7)
+                            }
+                            Text(sidebarSubtitle(report))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.vertical, 3)
@@ -51,7 +57,7 @@ struct DashboardView: View {
 
     private func sidebarSubtitle(_ report: DeviceReport) -> String {
         if report.isConnected, let state = report.latest?.state { return "Connected · \(state.liveLabel)" }
-        if let health = report.health { return "\(Format.percent(health)) health" }
+        if let health = report.health { return "\(Format.percent(health)) · \(report.verdict.title)" }
         return report.verdict.title
     }
 }

@@ -68,6 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Developer option for checking both appearances: BUDMETER_APPEARANCE=dark or light.
+        switch ProcessInfo.processInfo.environment["BUDMETER_APPEARANCE"] {
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        default: break
+        }
         // Belt and braces: never block a shutdown or logout.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification,
                                                           object: nil, queue: .main) { _ in

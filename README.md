@@ -61,6 +61,8 @@ scripts/demo-data.py /tmp/budmeter-demo.sqlite
 open --env BUDMETER_DB=/tmp/budmeter-demo.sqlite build/Build/Products/Debug/BudMeter.app
 ```
 
+Add `--env BUDMETER_APPEARANCE=dark` (or `light`) to check one appearance without changing the system setting.
+
 Layout:
 
 - `design/icon-artwork.png`: source art for the app icon; `swift scripts/make-icon.swift` turns it into the icon set.

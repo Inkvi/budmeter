@@ -27,11 +27,11 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 12) {
             if monitor.connected.isEmpty {
                 HStack(spacing: 10) {
-                    Image(systemName: "earbuds").font(.title2).foregroundStyle(.secondary)
+                    Image(systemName: "earbuds").font(.title2).foregroundStyle(Color.secondaryText)
                     VStack(alignment: .leading) {
                         Text("No earbuds connected").font(.headline)
                         Text("Connect a pair and BudMeter starts tracking.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(Color.secondaryText)
                     }
                 }
                 .padding(.vertical, 4)
@@ -56,7 +56,7 @@ struct MenuView: View {
             }
 
             if let error = monitor.errorMessage {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(DeviceReport.Verdict.replace.textColor)
             }
 
             Divider()
@@ -100,10 +100,10 @@ struct LiveDeviceCard: View {
                 Spacer()
                 if report.latest?.inCase == true {
                     Label("In case", systemImage: "bolt.fill")
-                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                        .font(.caption.weight(.medium)).foregroundStyle(Color.secondaryText)
                 } else if report.latest?.wearing == false {
                     Label("Not in ears", systemImage: "ear.trianglebadge.exclamationmark")
-                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                        .font(.caption.weight(.medium)).foregroundStyle(Color.secondaryText)
                 }
                 if let state = report.latest?.state { StateChip(state: state) }
             }
@@ -116,7 +116,7 @@ struct LiveDeviceCard: View {
                 VerdictPill(report: report)
             }
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.secondaryText)
         }
         .padding(12)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))

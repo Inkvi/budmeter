@@ -40,7 +40,7 @@ struct DeviceDetailView: View {
                         Text("Last connected \(Format.ago(report.device.lastSeen))")
                     }
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
             }
         }
     }
@@ -61,10 +61,10 @@ private struct Stat: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value ?? "—")
                 .font(.title2.bold().monospacedDigit())
-                .foregroundStyle(value == nil || tentative ? .secondary : .primary)
+                .foregroundStyle(value == nil || tentative ? Color.secondaryText : .primary)
             HStack(spacing: 5) {
                 if let dot { Circle().fill(dot).frame(width: 7, height: 7) }
-                Text(label).foregroundStyle(.secondary)
+                Text(label).foregroundStyle(Color.secondaryText)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -120,12 +120,12 @@ private struct HealthRing: View {
             if let health = report.health {
                 Circle()
                     .trim(from: 0, to: min(health, 1))
-                    .stroke(report.verdict.color.gradient, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                    .stroke(report.verdict.textColor, style: StrokeStyle(lineWidth: 10, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text(Format.percent(health))
                     .font(.title2.bold().monospacedDigit())
             } else {
-                Image(systemName: report.verdict.symbol).font(.title2).foregroundStyle(.secondary)
+                Image(systemName: report.verdict.symbol).font(.title2).foregroundStyle(Color.secondaryText)
             }
         }
         .frame(width: 92, height: 92)
@@ -143,7 +143,7 @@ private struct HealthHero: View {
             HealthRing(report: report)
             VStack(alignment: .leading, spacing: 6) {
                 if let hours = report.drain[.listening]?.fullChargeHours {
-                    (Text(Format.hours(hours)).font(.title.bold()) + Text("  listening per charge").foregroundStyle(.secondary))
+                    (Text(Format.hours(hours)).font(.title.bold()) + Text("  listening per charge").foregroundStyle(Color.secondaryText))
                 } else {
                     Text("Collecting data").font(.title.bold())
                 }
@@ -156,21 +156,21 @@ private struct HealthHero: View {
                     .popover(isPresented: $editingRating, arrowEdge: .bottom) { RatingEditor(device: report.device) }
                     if report.health != nil {
                         Text("·").foregroundStyle(.tertiary)
-                        Text(report.verdict.title).foregroundStyle(report.verdict.color)
+                        Text(report.verdict.title).foregroundStyle(report.verdict.textColor)
                     }
                     if let trend = report.listeningMinutesPerMonth, abs(trend) >= 5 {
                         Text("·").foregroundStyle(.tertiary)
-                        Text("\(trend < 0 ? "−" : "+")\(Int(abs(trend))) min a month").foregroundStyle(.secondary)
+                        Text("\(trend < 0 ? "−" : "+")\(Int(abs(trend))) min a month").foregroundStyle(Color.secondaryText)
                     }
                 }
-                if let note { Text(note).foregroundStyle(.secondary) }
+                if let note { Text(note).foregroundStyle(Color.secondaryText) }
             }
             Spacer(minLength: 16)
             if report.isConnected {
                 VStack(alignment: .leading, spacing: 8) {
                     BatteryRows(report: report)
                     if let remaining = report.remainingHours {
-                        Text("About \(Format.hours(remaining)) left").foregroundStyle(.secondary)
+                        Text("About \(Format.hours(remaining)) left").foregroundStyle(Color.secondaryText)
                     }
                 }
                 .frame(width: 220)
@@ -208,9 +208,13 @@ private struct RatingEditor: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 70)
                     .onSubmit(save)
+                    .accessibilityHint(isValid ? "" : "Enter 0.5 to 100 hours")
                 Text("hours per charge")
             }
-            Text("From the manufacturer, noise cancelling on.").font(.callout).foregroundStyle(.secondary)
+            if !isValid {
+                Text("Enter 0.5 to 100 hours.").font(.callout).foregroundStyle(DeviceReport.Verdict.replace.textColor)
+            }
+            Text("From the manufacturer, noise cancelling on.").font(.callout).foregroundStyle(Color.secondaryText)
             if device.ratedHoursOverride != nil {
                 Button("Use built-in value") {
                     text = ""   // so closing the popover doesn't save the old value again
@@ -222,6 +226,15 @@ private struct RatingEditor: View {
         .padding(14)
         .onAppear { text = device.ratedHours.map { String(format: "%g", $0) } ?? "" }
         .onDisappear(perform: save)
+    }
+
+    private var parsed: Double? {
+        Double(text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
+    }
+
+    /// Empty is valid (it restores the built-in value).
+    private var isValid: Bool {
+        text.trimmingCharacters(in: .whitespaces).isEmpty || parsed.map(Device.ratedHoursRange.contains) == true
     }
 
     /// Empty restores the built-in value; anything that isn't a plausible number of hours is ignored.
@@ -271,7 +284,7 @@ private struct IdleSection: View {
         Section(title: "Idle drain") {
             if idle?.ratePerHour == nil {
                 Text("Leave the earbuds connected with nothing playing and BudMeter will measure it.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondaryText)
             } else {
                 HStack(alignment: .top, spacing: 16) {
                     Stat(value: report.idleShareOfDrain.map(Format.percent), label: "Of battery spent idle",
@@ -309,7 +322,7 @@ private struct TrendSection: View {
                             .foregroundStyle(Color.gray)
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                             .annotation(position: .top, alignment: .leading) {
-                                Text("Rated").font(.caption).foregroundStyle(.secondary)
+                                Text("Rated").font(.caption).foregroundStyle(Color.secondaryText)
                             }
                     }
                     ForEach(points) { p in
@@ -329,12 +342,33 @@ private struct TrendSection: View {
                     }
                 }
                 .chartYAxis { AxisMarks { v in
-                    AxisGridLine(); AxisValueLabel { Text("\(v.as(Int.self) ?? 0)h") }
+                    AxisGridLine(); AxisValueLabel { Text("\(v.as(Int.self) ?? 0)h").foregroundStyle(Color.secondaryText) }
+                } }
+                .chartXAxis { AxisMarks { _ in
+                    AxisGridLine(); AxisValueLabel().foregroundStyle(Color.secondaryText)
                 } }
                 .frame(height: 170)
+                .accessibilityElement()
+                .accessibilityLabel("Runtime per charge, week by week")
+                .accessibilityValue(trendSummary(points))
             }
         }
     }
+}
+
+/// Spoken summary of the weekly runtime chart.
+private func trendSummary(_ points: [DeviceReport.TrendPoint]) -> String {
+    func describe(_ name: String, _ series: [(date: Date, hours: Double)]) -> String? {
+        guard let first = series.first, let last = series.last else { return nil }
+        if series.count == 1 { return "\(name): \(Format.hours(first.hours)) per charge in one week" }
+        let span = "\(first.date.formatted(date: .abbreviated, time: .omitted)) to \(last.date.formatted(date: .abbreviated, time: .omitted))"
+        return "\(name): from \(Format.hours(first.hours)) to \(Format.hours(last.hours)) per charge, \(span)"
+    }
+    let parts = [
+        describe("Listening", points.compactMap { p in p.listeningHours.map { (p.weekStart, $0) } }),
+        describe("Your mix", points.compactMap { p in p.mixedHours.map { (p.weekStart, $0) } }),
+    ].compactMap { $0 }
+    return parts.isEmpty ? "Not enough data yet" : parts.joined(separator: ". ")
 }
 
 private struct LegendItem: View {
@@ -354,7 +388,7 @@ private struct LegendItem: View {
             } else {
                 RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
             }
-            Text(text).font(.callout).foregroundStyle(.secondary)
+            Text(text).font(.callout).foregroundStyle(Color.secondaryText)
         }
     }
 }
@@ -394,7 +428,7 @@ private struct HistorySection: View {
             .fixedSize()
         } content: {
             if samples.isEmpty {
-                Text("No readings yet.").foregroundStyle(.secondary)
+                Text("No readings yet.").foregroundStyle(Color.secondaryText)
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 Chart {
@@ -402,6 +436,13 @@ private struct HistorySection: View {
                         RectangleMark(xStart: .value("Start", band.start), xEnd: .value("End", band.end),
                                       yStart: .value("Low", 0), yEnd: .value("High", 100))
                             .foregroundStyle(band.state.color.opacity(0.18))
+                    }
+                    // Activity strip under the plot: height tells activities apart without relying on color.
+                    ForEach(bands) { band in
+                        RectangleMark(xStart: .value("Start", band.start), xEnd: .value("End", band.end),
+                                      yStart: .value("Low", Self.stripBottom),
+                                      yEnd: .value("High", Self.stripBottom + band.state.stripHeight))
+                            .foregroundStyle(band.state.color)
                     }
                     ForEach(points) { p in
                         LineMark(x: .value("Time", p.time), y: .value("Battery", p.level),
@@ -411,14 +452,25 @@ private struct HistorySection: View {
                             .interpolationMethod(.stepEnd)
                     }
                 }
-                .chartYScale(domain: 0...100)
+                .chartYScale(domain: Self.stripBottom...100)
                 .chartYAxis { AxisMarks(values: [0, 50, 100]) { v in
-                    AxisGridLine(); AxisValueLabel { Text("\(v.as(Int.self) ?? 0)%") }
+                    AxisGridLine(); AxisValueLabel { Text("\(v.as(Int.self) ?? 0)%").foregroundStyle(Color.secondaryText) }
                 } }
-                .frame(height: 190)
+                .chartXAxis { AxisMarks { _ in
+                    AxisGridLine(); AxisValueLabel().foregroundStyle(Color.secondaryText)
+                } }
+                .frame(height: 210)
+                .accessibilityElement()
+                .accessibilityLabel("Battery history")
+                .accessibilityValue(historySummary)
                 HStack(spacing: 16) {
                     ForEach(UsageState.allCases, id: \.self) { s in
-                        LegendItem(color: s.color.opacity(0.5), text: s.label)
+                        HStack(spacing: 5) {
+                            RoundedRectangle(cornerRadius: 1).fill(s.color)
+                                .frame(width: 14, height: CGFloat(s.stripHeight) * 0.9)
+                                .frame(height: 12, alignment: .bottom)
+                            Text(s.label).font(.callout).foregroundStyle(Color.secondaryText)
+                        }
                     }
                     if samples.contains(where: { $0.right != nil }) {
                         LegendItem(color: .secondary, text: "Right bud", dashed: true)
@@ -432,6 +484,22 @@ private struct HistorySection: View {
             let loaded = await monitor.samples(for: report.device.address, since: end.addingTimeInterval(-Double(range) * 86400))
             if !Task.isCancelled { samples = loaded }   // a newer range may have replaced this load
         }
+    }
+
+    /// Bottom of the activity strip, below 0% on the chart's battery scale.
+    static let stripBottom = -16
+
+    /// Spoken summary: the battery range and time per activity, since the bands only show it by color.
+    private var historySummary: String {
+        let levels = points.map(\.level)
+        guard let high = levels.max(), let low = levels.min() else { return "No readings" }
+        // Same bands as the activity strip, so the summary matches what is drawn.
+        var hours: [UsageState: Double] = [:]
+        for band in bands { hours[band.state, default: 0] += band.end.timeIntervalSince(band.start) / 3600 }
+        let activity = UsageState.allCases.compactMap { s in
+            hours[s].map { "\(s.label) \(Format.hours($0))" }
+        }.joined(separator: ", ")
+        return "Battery between \(low)% and \(high)%. \(activity)"
     }
 
     /// Background bands showing what the earbuds were doing, merged across same-state samples.
@@ -485,7 +553,7 @@ private struct UsageSection: View {
             .fixedSize()
         } content: {
             if total == 0 {
-                Text("Not connected in this period.").foregroundStyle(.secondary)
+                Text("Not connected in this period.").foregroundStyle(Color.secondaryText)
             } else {
                 GeometryReader { geo in
                     HStack(spacing: 2) {
@@ -523,7 +591,7 @@ private struct MethodInfo: View {
             Text("Use on your phone isn't counted. Hover over a number to see how much data it's based on.")
             Divider()
             Text("Tracked since \(report.device.firstSeen.formatted(date: .abbreviated, time: .omitted)) · \(String(format: "%.1f", report.trackedCycles)) full charges used")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondaryText)
         }
         .frame(width: 340)
         .fixedSize(horizontal: false, vertical: true)
