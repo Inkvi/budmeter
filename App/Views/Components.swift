@@ -157,24 +157,3 @@ struct BatteryRows: View {
         }
     }
 }
-
-struct Card<Content: View>: View {
-    let title: String
-    var subtitle: String?
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                if let subtitle {
-                    Text(subtitle).font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            content
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-    }
-}

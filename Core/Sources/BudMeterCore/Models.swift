@@ -13,7 +13,7 @@ public enum UsageState: String, CaseIterable, Sendable, Codable {
         switch self {
         case .call: "Calls"
         case .listening: "Listening"
-        case .idle: "Idle (connected)"
+        case .idle: "Idle"
         }
     }
 }

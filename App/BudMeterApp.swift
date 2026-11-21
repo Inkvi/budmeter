@@ -28,6 +28,10 @@ struct BudMeterApp: App {
                     .keyboardShortcut("q")
             }
         }
+
+        Settings {
+            SettingsView().environment(monitor)
+        }
     }
 }
 

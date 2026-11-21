@@ -1,5 +1,4 @@
 import BudMeterCore
-import ServiceManagement
 import SwiftUI
 
 struct MenuBarLabel: View {
@@ -22,7 +21,7 @@ struct MenuBarLabel: View {
 struct MenuView: View {
     @Environment(Monitor.self) private var monitor
     @Environment(\.openWindow) private var openWindow
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -45,17 +44,13 @@ struct MenuView: View {
             let others = monitor.reports.filter { !$0.isConnected }
             if !others.isEmpty {
                 Divider()
-                Text("Your earbuds").font(.caption).foregroundStyle(.secondary)
                 ForEach(others, id: \.device.address) { report in
                     HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(report.device.name).lineLimit(1)
-                            Text("Seen \(Format.ago(report.device.lastSeen))")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        Text(report.device.name).lineLimit(1)
                         Spacer()
                         VerdictPill(report: report)
                     }
+                    .help("Last connected \(Format.ago(report.device.lastSeen))")
                 }
             }
 
@@ -71,16 +66,14 @@ struct MenuView: View {
                 }
                 .keyboardShortcut("d")
                 Spacer()
-                Toggle("Open at login", isOn: $launchAtLogin)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                    .onChange(of: launchAtLogin) { _, on in
-                        do {
-                            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-                        } catch {
-                            launchAtLogin = SMAppService.mainApp.status == .enabled
-                        }
-                    }
+                Button {
+                    openSettings()
+                    NSApp.activate(ignoringOtherApps: true)
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Settings")
                 Button {
                     AppDelegate.quit()
                 } label: {
@@ -91,8 +84,7 @@ struct MenuView: View {
             }
         }
         .padding(14)
-        .frame(width: 340)
-        .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
+        .frame(width: 320)
     }
 }
 
@@ -113,14 +105,12 @@ struct LiveDeviceCard: View {
             BatteryRows(report: report)
             HStack {
                 if let remaining = report.remainingHours {
-                    Label("About \(Format.hours(remaining)) left", systemImage: "clock")
-                } else {
-                    Label("Learning how fast it drains…", systemImage: "clock")
+                    Text("About \(Format.hours(remaining)) left")
                 }
                 Spacer()
                 VerdictPill(report: report)
             }
-            .font(.caption)
+            .font(.callout)
             .foregroundStyle(.secondary)
         }
         .padding(12)

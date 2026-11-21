@@ -4,310 +4,306 @@ import SwiftUI
 
 struct DeviceDetailView: View {
     let report: DeviceReport
+    @State private var showInfo = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                HStack(alignment: .top, spacing: 16) {
-                    HealthCard(report: report)
-                    if report.isConnected {
-                        Card(title: "Right now") {
-                            BatteryRows(report: report)
-                            if let remaining = report.remainingHours {
-                                Text("About **\(Format.hours(remaining))** left at the current activity.")
-                                    .font(.callout)
-                            } else {
-                                Text("Time left appears once BudMeter has seen the battery drop a few times.")
-                                    .font(.callout).foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(width: 280)
-                    }
-                }
-                RuntimeCard(report: report)
-                IdleCard(report: report)
-                TrendCard(report: report)
-                HistoryCard(report: report)
-                UsageCard(report: report)
-                if report.rightVsLeft != nil { LeftRightCard(report: report) }
-                if GalaxyBuds.isGalaxyBuds(name: report.device.name) { GalaxySettingCard() }
-                footer
+                HealthHero(report: report)
+                if report.drain.values.contains(where: \.hasEnoughData) { PerChargeSection(report: report) }
+                IdleSection(report: report)
+                TrendSection(report: report)
+                HistorySection(report: report)
+                UsageSection(report: report)
             }
             .padding(20)
+        }
+        .toolbar {
+            ToolbarItem {
+                Button { showInfo.toggle() } label: { Label("How it's measured", systemImage: "info.circle") }
+                    .help("How BudMeter measures battery")
+                    .popover(isPresented: $showInfo, arrowEdge: .bottom) { MethodInfo(report: report) }
+            }
         }
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(report.device.name).font(.title2.bold())
-                Group {
-                    if report.isConnected, let state = report.latest?.state {
-                        Text("Connected · \(state.liveLabel)")
-                    } else {
-                        Text("Last connected \(Format.ago(report.device.lastSeen))")
-                    }
+        VStack(alignment: .leading, spacing: 2) {
+            Text(report.device.name).font(.title2.bold())
+            Group {
+                if report.isConnected, let state = report.latest?.state {
+                    Text("Connected · \(state.liveLabel)")
+                } else {
+                    Text("Last connected \(Format.ago(report.device.lastSeen))")
                 }
-                .font(.callout).foregroundStyle(.secondary)
             }
-            Spacer()
-            VerdictPill(report: report)
+            .foregroundStyle(.secondary)
         }
     }
+}
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Tracked since \(report.device.firstSeen.formatted(date: .abbreviated, time: .omitted)) · \(String(format: "%.1f", report.trackedCycles)) full charges used while connected to this Mac.")
-            Text("BudMeter only sees time connected to this Mac. Drain is measured between battery steps, so the numbers stay accurate even when the earbuds report battery in 10% steps. Time spent charging, disconnected or with the Mac asleep is left out.")
+// MARK: Building blocks
+
+/// A big value with a short label under it. Details go in the tooltip, not on screen.
+private struct Stat: View {
+    let value: String?
+    let label: String
+    var dot: Color?
+    /// Shown dimmed when the estimate is based on little data.
+    var tentative = false
+    var help: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value ?? "—")
+                .font(.title2.bold().monospacedDigit())
+                .foregroundStyle(value == nil || tentative ? .secondary : .primary)
+            HStack(spacing: 5) {
+                if let dot { Circle().fill(dot).frame(width: 7, height: 7) }
+                Text(label).foregroundStyle(.secondary)
+            }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(help ?? "")
     }
+}
+
+private struct Section<Trailing: View, Content: View>: View {
+    let title: String
+    @ViewBuilder var trailing: Trailing
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                trailing
+            }
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+extension Section where Trailing == EmptyView {
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.trailing = EmptyView()
+        self.content = content()
+    }
+}
+
+/// Tooltip text for a drain estimate.
+private func detail(_ d: StateDrain?) -> String? {
+    guard let d, let rate = d.ratePerHour else {
+        return d.map { "\(Format.hours($0.hours)) measured so far. Needs 30 minutes and a 5% drop." }
+    }
+    return "\(Format.rate(rate)) · measured over \(Format.hours(d.hours)) · \(d.confidence.rawValue) confidence"
 }
 
 // MARK: Health
 
-private struct HealthCard: View {
-    @Environment(Monitor.self) private var monitor
-    let report: DeviceReport
-    @State private var ratedText = ""
-    @FocusState private var ratedFocused: Bool
-
-    var body: some View {
-        Card(title: "Battery health", subtitle: report.basisDays.map { "Based on the last \($0) days" } ?? "Based on all tracked use") {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                if let health = report.health {
-                    Text(Format.percent(health))
-                        .font(.system(size: 44, weight: .bold, design: .rounded))
-                        .foregroundStyle(report.verdict.color)
-                } else {
-                    Image(systemName: report.verdict.symbol)
-                        .font(.system(size: 30))
-                        .foregroundStyle(.secondary)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    if let hours = report.drain[.listening]?.fullChargeHours {
-                        Text("Lasts about **\(Format.hours(hours))** of listening per charge")
-                    }
-                    if let rated = report.device.ratedHours {
-                        Text("Rated \(Format.hours(rated)) when new").foregroundStyle(.secondary)
-                    }
-                }
-                .font(.callout)
-            }
-            Text(advice).font(.callout).fixedSize(horizontal: false, vertical: true)
-            if let trend = report.listeningMinutesPerMonth {
-                Label(trend < -5 ? "Losing about \(Int(-trend)) min of listening time per month"
-                      : trend > 5 ? "Runtime improved recently (likely lighter use)"
-                      : "Runtime has been stable",
-                      systemImage: trend < -5 ? "chart.line.downtrend.xyaxis" : "chart.line.flattrend.xyaxis")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 6) {
-                Text("Rated listening time:").font(.caption).foregroundStyle(.secondary)
-                TextField("hours", text: $ratedText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 56)
-                    .font(.caption)
-                    .focused($ratedFocused)
-                    .onSubmit(saveRated)
-                    .onChange(of: ratedFocused) { _, focused in if !focused { saveRated() } }
-                Text("h").font(.caption).foregroundStyle(.secondary)
-                if report.device.ratedHoursOverride != nil {
-                    Button("Reset") {
-                        monitor.setRatedHours(nil, for: report.device.address)
-                    }
-                    .buttonStyle(.link).font(.caption)
-                }
-            }
-        }
-        .onAppear(perform: syncRated)
-        .onChange(of: report.device.ratedHours) { syncRated() }
-    }
-
-    private var advice: String {
-        switch report.verdict {
-        case .good:
-            "The battery is in good shape."
-        case .worn:
-            "Noticeably shorter than new. Fine for now, but plan for a replacement."
-        case .replace:
-            "Lasting under 60% of the rated time. Time to replace them, or have the batteries serviced."
-        case .collecting:
-            "Keep using them with your Mac. A first estimate needs about 30 minutes of playback and a few percent of battery drop."
-        case .unknownRating:
-            "Enter the manufacturer's rated listening time below to see battery health."
-        }
-    }
-
-    private func syncRated() {
-        ratedText = report.device.ratedHours.map { String(format: "%g", $0) } ?? ""
-    }
-
-    /// Empty clears the override (back to the built-in rating); anything that isn't a positive number is ignored.
-    private func saveRated() {
-        let text = ratedText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
-        if text.isEmpty {
-            monitor.setRatedHours(nil, for: report.device.address)
-        } else if let value = Double(text), value > 0, value != report.device.ratedHours {
-            monitor.setRatedHours(value, for: report.device.address)
-        }
-        syncRated()
-    }
-}
-
-// MARK: Runtime per activity
-
-private struct RuntimeCard: View {
+/// The battery ring from the app icon, filled to the health percentage.
+private struct HealthRing: View {
     let report: DeviceReport
 
     var body: some View {
-        Card(title: "How long a full charge lasts", subtitle: "Measured from real drain, for the bud that runs out first") {
-            HStack(spacing: 12) {
-                RuntimeTile(title: "Listening", symbol: UsageState.listening.symbol, color: UsageState.listening.color,
-                            drain: report.drain[.listening])
-                RuntimeTile(title: "Calls", symbol: UsageState.call.symbol, color: UsageState.call.color,
-                            drain: report.drain[.call])
-                RuntimeTile(title: "Idle", symbol: UsageState.idle.symbol, color: UsageState.idle.color,
-                            drain: report.drain[.idle])
-                RuntimeTile(title: "Your real mix", symbol: "person.fill", color: .purple, drain: report.mixed)
-            }
-        }
-    }
-}
-
-private struct RuntimeTile: View {
-    let title: String
-    let symbol: String
-    let color: Color
-    let drain: StateDrain?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).foregroundStyle(color)
-            if let drain, let hours = drain.fullChargeHours, let rate = drain.ratePerHour {
-                Text(Format.hours(hours)).font(.title2.bold().monospacedDigit())
-                Text("\(Format.rate(rate)) · \(Format.hours(drain.hours)) measured")
-                    .font(.caption).foregroundStyle(.secondary)
-                ConfidenceDots(confidence: drain.confidence)
+        ZStack {
+            Circle().stroke(.quaternary, lineWidth: 10)
+            if let health = report.health {
+                Circle()
+                    .trim(from: 0, to: min(health, 1))
+                    .stroke(report.verdict.color.gradient, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text(Format.percent(health))
+                    .font(.title2.bold().monospacedDigit())
             } else {
-                Text("—").font(.title2.bold()).foregroundStyle(.tertiary)
-                Text(drain.flatMap { $0.hours >= 1.0 / 60 ? "\(Format.hours($0.hours)) measured so far" : nil } ?? "No data yet")
-                    .font(.caption).foregroundStyle(.secondary)
+                Image(systemName: report.verdict.symbol).font(.title2).foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .frame(width: 92, height: 92)
+        .accessibilityElement()
+        .accessibilityLabel(report.health.map { "Battery health \(Format.percent($0))" } ?? report.verdict.title)
     }
 }
 
-private struct ConfidenceDots: View {
-    let confidence: Confidence
+private struct HealthHero: View {
+    let report: DeviceReport
+    @State private var editingRating = false
 
     var body: some View {
-        let filled = confidence == .high ? 3 : confidence == .medium ? 2 : 1
-        HStack(spacing: 3) {
-            ForEach(0..<3) { i in
-                Circle().fill(i < filled ? Color.primary.opacity(0.6) : Color.primary.opacity(0.12))
-                    .frame(width: 5, height: 5)
+        HStack(alignment: .center, spacing: 20) {
+            HealthRing(report: report)
+            VStack(alignment: .leading, spacing: 6) {
+                if let hours = report.drain[.listening]?.fullChargeHours {
+                    (Text(Format.hours(hours)).font(.title.bold()) + Text("  listening per charge").foregroundStyle(.secondary))
+                } else {
+                    Text("Collecting data").font(.title.bold())
+                }
+                HStack(spacing: 6) {
+                    Button(report.device.ratedHours.map { "Rated \(Format.hours($0))" } ?? "Set rated time") {
+                        editingRating = true
+                    }
+                    .buttonStyle(.link)
+                    .help("Manufacturer's listening time per charge. Click to change.")
+                    .popover(isPresented: $editingRating, arrowEdge: .bottom) { RatingEditor(device: report.device) }
+                    if report.health != nil {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(report.verdict.title).foregroundStyle(report.verdict.color)
+                    }
+                    if let trend = report.listeningMinutesPerMonth, abs(trend) >= 5 {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text("\(trend < 0 ? "−" : "+")\(Int(abs(trend))) min a month").foregroundStyle(.secondary)
+                    }
+                }
+                if let note { Text(note).foregroundStyle(.secondary) }
             }
-            Text("\(confidence.rawValue) confidence").font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 16)
+            if report.isConnected {
+                VStack(alignment: .leading, spacing: 8) {
+                    BatteryRows(report: report)
+                    if let remaining = report.remainingHours {
+                        Text("About \(Format.hours(remaining)) left").foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 220)
+            }
         }
-        .help("Based on how much battery drop has been observed: low under 15%, medium under 40%, high above.")
+        .padding(16)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// One short line, only when there's something to act on.
+    private var note: String? {
+        switch report.verdict {
+        case .collecting: return "Needs about 30 minutes of playback with this Mac."
+        case .replace: return "Time to replace them."
+        case .worn: return "Plan a replacement."
+        default: break
+        }
+        if let diff = report.rightVsLeft, abs(diff) >= 0.1 {
+            let ratio = diff > 0 ? diff : 1 / (1 + diff) - 1
+            return "\(diff > 0 ? "Right" : "Left") bud drains \(Format.percent(ratio)) faster."
+        }
+        return nil
     }
 }
 
-// MARK: Idle drain
+private struct RatingEditor: View {
+    @Environment(Monitor.self) private var monitor
+    let device: Device
+    @State private var text = ""
 
-private struct IdleCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                TextField("Hours", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 70)
+                    .onSubmit(save)
+                Text("hours per charge")
+            }
+            Text("From the manufacturer, noise cancelling on.").font(.callout).foregroundStyle(.secondary)
+            if device.ratedHoursOverride != nil {
+                Button("Use built-in value") { monitor.setRatedHours(nil, for: device.address) }
+                    .buttonStyle(.link)
+            }
+        }
+        .padding(14)
+        .onAppear { text = device.ratedHours.map { String(format: "%g", $0) } ?? "" }
+        .onDisappear(perform: save)
+    }
+
+    /// Empty restores the built-in value; anything that isn't a positive number is ignored.
+    private func save() {
+        let t = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        if t.isEmpty {
+            if device.ratedHoursOverride != nil { monitor.setRatedHours(nil, for: device.address) }
+        } else if let value = Double(t), value > 0, value != device.ratedHours {
+            monitor.setRatedHours(value, for: device.address)
+        }
+    }
+}
+
+// MARK: Per charge
+
+private struct PerChargeSection: View {
+    let report: DeviceReport
+
+    var body: some View {
+        Section(title: "Per charge") {
+            HStack(alignment: .top, spacing: 16) {
+                stat(.listening, "Listening")
+                stat(.call, "Calls")
+                stat(.idle, "Idle")
+                Stat(value: report.mixed.fullChargeHours.map(Format.hours), label: "Your mix", dot: .purple,
+                     tentative: report.mixed.confidence == .low,
+                     help: detail(report.mixed).map { "Listening, calls and idle as you actually use them. \($0)" })
+            }
+        }
+    }
+
+    private func stat(_ state: UsageState, _ label: String) -> some View {
+        let d = report.drain[state]
+        return Stat(value: d?.fullChargeHours.map(Format.hours), label: label, dot: state.color,
+                    tentative: d?.confidence == .low, help: detail(d))
+    }
+}
+
+// MARK: Idle
+
+private struct IdleSection: View {
     let report: DeviceReport
 
     var body: some View {
         let idle = report.drain[.idle]
         let listeningRate = report.drain[.listening]?.ratePerHour
-        let idleHours7 = report.connectedHoursLast7Days[.idle] ?? 0
-        Card(title: "Idle drain", subtitle: "Connected to the Mac with no audio playing") {
-            if let idle, let rate = idle.ratePerHour {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("While idle, the battery drops **\(Format.rate(rate))**. Left connected and silent, a full charge would be gone in about **\(Format.hours(100 / rate))**.")
-                    if let listeningRate, listeningRate > 0 {
-                        Text("That is \(Format.percent(rate / listeningRate)) of the drain while listening.")
-                    }
-                    if let share = report.idleShareOfDrain, share > 0.01 {
-                        let cost = listeningRate.map { idle.drop / $0 }
-                        let period = report.mixBasisDays.map { "In the last \($0) days, idle" } ?? "Idle"
-                        Text("\(period) time used **\(Format.percent(share))** of all battery spent\(cost.map { ", the same as \(Format.hours($0)) of listening" } ?? "").")
+        Section(title: "Idle drain") {
+            if idle?.ratePerHour == nil {
+                Text("Leave the earbuds connected with nothing playing and BudMeter will measure it.")
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(alignment: .top, spacing: 16) {
+                    Stat(value: report.idleShareOfDrain.map(Format.percent), label: "Of battery spent idle",
+                         help: [report.mixBasisDays.map { "Last \($0) days." },
+                                listeningRate.flatMap { l in idle.map { "Same as \(Format.hours($0.drop / l)) of listening." } },
+                                idle?.ratePerHour.map { "Idle drain \(Format.rate($0))." }]
+                            .compactMap { $0 }.joined(separator: " "))
+                    if report.idleWorn != nil || report.idleNotWorn != nil {
+                        Stat(value: report.idleWorn?.ratePerHour.map(Format.rate), label: "In ears", help: detail(report.idleWorn))
+                        Stat(value: report.idleNotWorn?.ratePerHour.map(Format.rate), label: "Out of ears", help: detail(report.idleNotWorn))
+                    } else {
+                        Stat(value: Format.hours(report.connectedHoursLast7Days[.idle] ?? 0), label: "Idle this week")
                     }
                 }
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(idle.flatMap { $0.hours >= 1.0 / 60 ? "\(Format.hours($0.hours)) of idle time measured so far. An idle estimate needs at least 30 minutes and a 5% drop, which can take a few hours of idle time." : nil }
-                     ?? "No idle time recorded yet. Leave the earbuds connected without audio and BudMeter will measure how much they drain.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if report.idleWorn != nil || report.idleNotWorn != nil {
-                HStack(spacing: 12) {
-                    IdleSplitTile(title: "In your ears", symbol: "ear", drain: report.idleWorn)
-                    IdleSplitTile(title: "Out of your ears, still connected", symbol: "rectangle.portrait.on.rectangle.portrait.slash",
-                                  drain: report.idleNotWorn)
-                }
-            }
-            if idleHours7 > 0 {
-                Text("Idle connected time in the last 7 days: \(Format.hours(idleHours7))")
-                    .font(.caption).foregroundStyle(.secondary)
             }
         }
-    }
-}
-
-private struct IdleSplitTile: View {
-    let title: String
-    let symbol: String
-    let drain: StateDrain?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if let drain, let rate = drain.ratePerHour {
-                Text(Format.rate(rate)).font(.title3.bold().monospacedDigit())
-                Text("Full charge gone in \(Format.hours(100 / rate)) · \(Format.hours(drain.hours)) measured")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                Text("—").font(.title3.bold()).foregroundStyle(.tertiary)
-                Text(drain.map { "\(Format.hours($0.hours)) measured so far" } ?? "No data yet")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
 // MARK: Trend
 
-private struct TrendCard: View {
+private struct TrendSection: View {
     let report: DeviceReport
 
     var body: some View {
         let points = report.trend.filter { $0.listeningHours != nil || $0.mixedHours != nil }
-        Card(title: "Runtime over time", subtitle: "Full-charge runtime, week by week") {
-            if points.isEmpty {
-                Text("A weekly trend appears once there is enough data for a week.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
+        if !points.isEmpty {
+            Section(title: "Runtime per charge") {
+                LegendItem(color: UsageState.listening.color, text: "Listening")
+                LegendItem(color: .purple, text: "Your mix", dashed: true)
+            } content: {
                 Chart {
                     if let rated = report.device.ratedHours {
                         RuleMark(y: .value("Rated", rated))
                             .foregroundStyle(Color.gray)
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                             .annotation(position: .top, alignment: .leading) {
-                                Text("Rated \(Format.hours(rated))").font(.caption2).foregroundStyle(.secondary)
+                                Text("Rated").font(.caption).foregroundStyle(.secondary)
                             }
                     }
                     ForEach(points) { p in
@@ -320,18 +316,16 @@ private struct TrendCard: View {
                         }
                         if let h = p.mixedHours {
                             LineMark(x: .value("Week", p.weekStart, unit: .weekOfYear), y: .value("Hours", h),
-                                     series: .value("Kind", "Real mix"))
+                                     series: .value("Kind", "Your mix"))
                                 .foregroundStyle(.purple)
                                 .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
                         }
                     }
                 }
-                .chartYAxisLabel("hours per charge")
-                .frame(height: 180)
-                HStack(spacing: 16) {
-                    LegendItem(color: UsageState.listening.color, text: "Listening")
-                    LegendItem(color: .purple, text: "Your real mix", dashed: true)
-                }
+                .chartYAxis { AxisMarks { v in
+                    AxisGridLine(); AxisValueLabel { Text("\(v.as(Int.self) ?? 0)h") }
+                } }
+                .frame(height: 170)
             }
         }
     }
@@ -354,14 +348,14 @@ private struct LegendItem: View {
             } else {
                 RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
             }
-            Text(text).font(.caption).foregroundStyle(.secondary)
+            Text(text).font(.callout).foregroundStyle(.secondary)
         }
     }
 }
 
 // MARK: Battery history
 
-private struct HistoryCard: View {
+private struct HistorySection: View {
     @Environment(Monitor.self) private var monitor
     let report: DeviceReport
     @State private var range = 1
@@ -383,18 +377,18 @@ private struct HistoryCard: View {
     }
 
     var body: some View {
-        Card(title: "Battery history", subtitle: report.isConnected ? nil : report.latest.map { "Up to the last reading, \(Format.ago($0.time))" }) {
+        Section(title: "Battery") {
             Picker("Range", selection: $range) {
-                Text("24 hours").tag(1)
-                Text("7 days").tag(7)
-                Text("30 days").tag(30)
+                Text("Day").tag(1)
+                Text("Week").tag(7)
+                Text("Month").tag(30)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-
+        } content: {
             if samples.isEmpty {
-                Text("No readings yet.").font(.callout).foregroundStyle(.secondary)
+                Text("No readings yet.").foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 Chart {
@@ -412,22 +406,22 @@ private struct HistoryCard: View {
                     }
                 }
                 .chartYScale(domain: 0...100)
-                .chartYAxis { AxisMarks(values: [0, 25, 50, 75, 100]) { v in
+                .chartYAxis { AxisMarks(values: [0, 50, 100]) { v in
                     AxisGridLine(); AxisValueLabel { Text("\(v.as(Int.self) ?? 0)%") }
                 } }
-                .frame(height: 200)
+                .frame(height: 190)
                 HStack(spacing: 16) {
                     ForEach(UsageState.allCases, id: \.self) { s in
                         LegendItem(color: s.color.opacity(0.5), text: s.label)
                     }
-                    if report.channels.contains(.right) {
-                        Text("solid: left · dashed: right").font(.caption).foregroundStyle(.secondary)
+                    if report.levels.count > 1 {
+                        LegendItem(color: .secondary, text: "Right bud", dashed: true)
                     }
                 }
             }
         }
         .task(id: "\(range)-\(report.latest?.time.timeIntervalSince1970 ?? 0)") {
-            // Window ends at the last reading, so pairs not used today still show their latest use.
+            // The window ends at the last reading, so pairs not used today still show their latest use.
             let end = report.latest?.time ?? Date()
             samples = monitor.samples(for: report.device.address, since: end.addingTimeInterval(-Double(range) * 86400))
         }
@@ -447,15 +441,16 @@ private struct HistoryCard: View {
         return out
     }
 
-    /// Battery lines, broken into separate series at disconnects so they don't bridge gaps.
+    /// Battery lines for the batteries shown at the top, broken at disconnects so they don't bridge gaps.
     private var points: [Point] {
+        let channels = report.levels.map(\.channel)
         var out: [Point] = []
         var segment = 0
         var previous: Date?
         for s in samples {
             if let previous, s.time.timeIntervalSince(previous) > Analysis.maxGap { segment += 1 }
             previous = s.time
-            for ch in report.channels {
+            for ch in channels {
                 if let v = s.value(ch) {
                     out.append(Point(time: s.time, level: v, series: "\(ch.rawValue)-\(segment)", channel: ch))
                 }
@@ -465,34 +460,27 @@ private struct HistoryCard: View {
     }
 }
 
-// MARK: Usage
+// MARK: Connected time
 
-private struct UsageCard: View {
+private struct UsageSection: View {
     let report: DeviceReport
+    @State private var days = 7
 
     var body: some View {
-        Card(title: "Time connected to this Mac") {
-            VStack(alignment: .leading, spacing: 12) {
-                UsageBar(title: "Last 7 days", hours: report.connectedHoursLast7Days)
-                UsageBar(title: "Last 30 days", hours: report.connectedHoursLast30Days)
-            }
-        }
-    }
-}
-
-private struct UsageBar: View {
-    let title: String
-    let hours: [UsageState: Double]
-
-    var body: some View {
+        let hours = days == 7 ? report.connectedHoursLast7Days : report.connectedHoursLast30Days
         let total = hours.values.reduce(0, +)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title).font(.callout.weight(.medium))
-                Spacer()
-                Text(Format.hours(total)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+        Section(title: "Connected time") {
+            Picker("Range", selection: $days) {
+                Text("Week").tag(7)
+                Text("Month").tag(30)
             }
-            if total > 0 {
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+        } content: {
+            if total == 0 {
+                Text("Not connected in this period.").foregroundStyle(.secondary)
+            } else {
                 GeometryReader { geo in
                     HStack(spacing: 2) {
                         ForEach(UsageState.allCases, id: \.self) { s in
@@ -505,60 +493,34 @@ private struct UsageBar: View {
                     }
                 }
                 .frame(height: 10)
-                HStack(spacing: 14) {
+                HStack(spacing: 16) {
                     ForEach(UsageState.allCases, id: \.self) { s in
-                        if let h = hours[s], h > 0 {
-                            LegendItem(color: s.color, text: "\(s.label) \(Format.hours(h))")
-                        }
+                        Stat(value: Format.hours(hours[s] ?? 0), label: s.label, dot: s.color)
                     }
+                    Stat(value: Format.hours(total), label: "Total")
                 }
             }
         }
     }
 }
 
-// MARK: Galaxy Buds
+// MARK: Method info
 
-private struct GalaxySettingCard: View {
-    @Environment(Monitor.self) private var monitor
-
-    var body: some View {
-        @Bindable var monitor = monitor
-        Card(title: "Galaxy Buds details") {
-            Toggle("Read each bud's battery, the case and in-ear status", isOn: $monitor.galaxyDetail)
-            Text("Uses Samsung's own Bluetooth channel, the one the Galaxy Wearable app uses. BudMeter only listens. Turn this off if your phone's Galaxy Wearable app has trouble connecting while the buds are paired to the Mac; you'll still get one battery level for the pair.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-// MARK: Left vs right
-
-private struct LeftRightCard: View {
+private struct MethodInfo: View {
     let report: DeviceReport
 
     var body: some View {
-        let diff = report.rightVsLeft ?? 0
-        let worse = diff > 0 ? "right" : "left"
-        let ratio = diff > 0 ? diff : (1 / (1 + diff) - 1)
-        Card(title: "Left vs right") {
-            if abs(diff) < 0.1 {
-                Text("Both buds drain at about the same rate.").font(.callout)
-            } else {
-                Text("The **\(worse)** bud drains **\(Format.percent(ratio)) faster**. Uneven drain usually means that bud's battery has worn more, or it is the one handling the microphone.")
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 24) {
-                ForEach([Channel.left, .right], id: \.self) { ch in
-                    let mix = (report.drainByChannel[ch] ?? [:]).values.reduce(StateDrain(), +)
-                    VStack(alignment: .leading) {
-                        Text(ch.label).font(.caption).foregroundStyle(.secondary)
-                        Text(mix.fullChargeHours.map(Format.hours) ?? "—").font(.title3.bold())
-                    }
-                }
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("How it's measured").font(.headline)
+            Text("BudMeter reads the battery every 30 seconds while the earbuds are connected to this Mac, and notes whether audio is playing, the microphone is on, or neither.")
+            Text("Drain is measured from one battery step to the next, so earbuds that report in 10% steps aren't skewed. Charging, disconnects and sleep are left out. Health compares listening time per charge with the rated time.")
+            Text("Use on your phone isn't counted. Hover over a number to see how much data it's based on.")
+            Divider()
+            Text("Tracked since \(report.device.firstSeen.formatted(date: .abbreviated, time: .omitted)) · \(String(format: "%.1f", report.trackedCycles)) full charges used")
+                .foregroundStyle(.secondary)
         }
+        .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(16)
     }
 }
