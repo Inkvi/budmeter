@@ -32,7 +32,7 @@ Every 30 seconds BudMeter checks paired headsets:
 
 A reading is saved when anything changes, and every 2 minutes otherwise, to `~/Library/Application Support/BudMeter/budmeter.sqlite`.
 
-**Drain is measured between battery steps.** Many headsets report battery in 10% steps. Measuring from an arbitrary moment would mix in an unknown part of a step, so within each continuous discharge BudMeter only counts the time from the first observed step down to the last. That keeps the rate accurate whatever the step size. Charging (level going up), disconnects, gaps over 6 minutes (for example the Mac sleeping) and sudden jumps end a discharge run and are left out.
+**Drain is measured between battery steps.** Many headsets report battery in 10% steps. Measuring from an arbitrary moment would mix in an unknown part of a step, so within each continuous discharge BudMeter only counts the time from the first observed step down to the last. That avoids a bias from the step size. With 10% steps a single estimate is still coarse, so the numbers settle as more sessions are recorded; the confidence dots show how much battery drop each estimate is based on. Charging (level going up), disconnects, gaps over 6 minutes (for example the Mac sleeping) and sudden jumps end a discharge run and are left out.
 
 A rate is only shown after at least 30 minutes and a 5% drop in that activity. The health number uses the last 30 days when there is enough listening data, so it reflects the battery as it is now.
 

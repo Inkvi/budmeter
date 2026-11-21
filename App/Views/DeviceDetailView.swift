@@ -73,6 +73,7 @@ private struct HealthCard: View {
     @Environment(Monitor.self) private var monitor
     let report: DeviceReport
     @State private var ratedText = ""
+    @FocusState private var ratedFocused: Bool
 
     var body: some View {
         Card(title: "Battery health", subtitle: report.basisDays.map { "Based on the last \($0) days" } ?? "Based on all tracked use") {
@@ -110,7 +111,9 @@ private struct HealthCard: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 56)
                     .font(.caption)
+                    .focused($ratedFocused)
                     .onSubmit(saveRated)
+                    .onChange(of: ratedFocused) { _, focused in if !focused { saveRated() } }
                 Text("h").font(.caption).foregroundStyle(.secondary)
                 if report.device.ratedHoursOverride != nil {
                     Button("Reset") {
@@ -143,9 +146,15 @@ private struct HealthCard: View {
         ratedText = report.device.ratedHours.map { String(format: "%g", $0) } ?? ""
     }
 
+    /// Empty clears the override (back to the built-in rating); anything that isn't a positive number is ignored.
     private func saveRated() {
-        let value = Double(ratedText.replacingOccurrences(of: ",", with: "."))
-        monitor.setRatedHours(value.flatMap { $0 > 0 ? $0 : nil }, for: report.device.address)
+        let text = ratedText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        if text.isEmpty {
+            monitor.setRatedHours(nil, for: report.device.address)
+        } else if let value = Double(text), value > 0, value != report.device.ratedHours {
+            monitor.setRatedHours(value, for: report.device.address)
+        }
+        syncRated()
     }
 }
 
@@ -229,7 +238,7 @@ private struct IdleCard: View {
                     }
                     if let share = report.idleShareOfDrain, share > 0.01 {
                         let cost = listeningRate.map { idle.drop / $0 }
-                        let period = report.basisDays.map { "In the last \($0) days, idle" } ?? "Idle"
+                        let period = report.mixBasisDays.map { "In the last \($0) days, idle" } ?? "Idle"
                         Text("\(period) time used **\(Format.percent(share))** of all battery spent\(cost.map { ", the same as \(Format.hours($0)) of listening" } ?? "").")
                     }
                 }

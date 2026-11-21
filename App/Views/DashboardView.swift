@@ -32,6 +32,7 @@ struct DashboardView: View {
         }
         .onAppear { selectDefault() }
         .onChange(of: monitor.reports.map(\.device.address)) { selectDefault() }
+        .onChange(of: selection) { selectDefault() }
         .frame(minWidth: 820, minHeight: 600)
     }
 

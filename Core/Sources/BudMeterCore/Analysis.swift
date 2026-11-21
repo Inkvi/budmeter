@@ -64,8 +64,9 @@ public enum Analysis {
     /// makes the measurement exact regardless of step size, and it also drops the flat time
     /// spent in the charging case before the level starts rising.
     ///
-    /// A run ends on: a gap (disconnect / sleep), a rise in level (charging), a missing value,
-    /// or an implausible jump (a bud swapped or reset).
+    /// A run ends on: a gap (disconnect / sleep), a rise in level (charging), or an implausible jump
+    /// (a bud swapped or reset). A sample without a value for this battery is skipped, not a break:
+    /// headsets sometimes report nothing for a moment.
     public static func intervals(_ samples: [Sample], channel: Channel) -> [DrainInterval] {
         var out: [DrainInterval] = []
         var run: [(time: Date, value: Int, state: UsageState, wearing: Bool?)] = []
@@ -83,10 +84,7 @@ public enum Analysis {
         }
 
         for sample in samples {
-            guard let value = sample.value(channel) else {
-                flush()
-                continue
-            }
+            guard let value = sample.value(channel) else { continue }
             if let prev = run.last {
                 let gap = sample.time.timeIntervalSince(prev.time)
                 let jump = prev.value - value
@@ -107,6 +105,23 @@ public enum Analysis {
             out[interval.state, default: StateDrain()].add(interval)
         }
         return out
+    }
+
+    /// Every step down in level between samples of one continuous connection, in percentage points.
+    /// Unlike `intervals`, this counts partial steps at the edges too: it measures how much battery was
+    /// used, not how fast.
+    public static func totalDrop(_ samples: [Sample], channel: Channel) -> Double {
+        var sum = 0.0
+        var previous: (time: Date, value: Int)?
+        for sample in samples {
+            guard let value = sample.value(channel) else { continue }
+            if let (time, last) = previous {
+                let gap = sample.time.timeIntervalSince(time)
+                if gap <= maxGap, value < last, !(last - value >= 15 && gap < 15 * 60) { sum += Double(last - value) }
+            }
+            previous = (sample.time, value)
+        }
+        return sum
     }
 
     /// Hours spent connected in each state, regardless of battery data.

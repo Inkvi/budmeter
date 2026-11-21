@@ -147,10 +147,8 @@ struct BatteryRows: View {
     var body: some View {
         if let latest = report.latest {
             VStack(spacing: 6) {
-                ForEach(report.channels, id: \.self) { channel in
-                    if let level = latest.value(channel) {
-                        BatteryRow(label: channel.label, level: level)
-                    }
+                ForEach(report.levels, id: \.channel) { item in
+                    BatteryRow(label: item.channel.label, level: item.level)
                 }
                 if let level = latest.caseLevel {
                     BatteryRow(label: "Case", level: level)

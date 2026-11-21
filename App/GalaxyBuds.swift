@@ -42,6 +42,7 @@ final class GalaxyBuds: NSObject, IOBluetoothRFCOMMChannelDelegate {
     }
 
     func disconnect(address: String) {
+        lastAttempt[address] = nil
         channels.removeValue(forKey: address)?.close()
         status[address] = nil
         buffers[address] = nil

@@ -207,3 +207,88 @@ private func bytes(_ hex: String) -> Data {
     #expect(status?.wearing == true)
     #expect(GalaxyProtocol.parse(id: 0xc2, payload: messages[0].payload) == nil)
 }
+
+// Regression tests from code review.
+
+private func lrSamples(_ segments: [(hours: Double, state: UsageState, leftRate: Double, rightRate: Double)],
+                       start: Date = Date(timeIntervalSince1970: 1_750_000_000), left: Double = 100, right: Double = 100,
+                       main: Bool = false) -> [Sample] {
+    var out: [Sample] = []
+    var t = start, l = left, r = right
+    for seg in segments {
+        for _ in 0..<Int(seg.hours * 30) {
+            let li = Int(l.rounded(.up)), ri = Int(r.rounded(.up))
+            out.append(main ? Sample(time: t, address: "x", main: (li + ri) / 2, state: seg.state)
+                            : Sample(time: t, address: "x", left: li, right: ri, state: seg.state))
+            t += 120; l -= seg.leftRate / 30; r -= seg.rightRate / 30
+        }
+    }
+    return out
+}
+
+@Test func singleLevelFallbackStillCounts() {
+    // An hour with per-bud data, then four hours where only the pair level is known.
+    var samples = lrSamples([(1, .listening, 10, 10)])
+    for i in samples.indices { samples[i].main = samples[i].left }
+    let tail = lrSamples([(4, .listening, 10, 10)], start: samples.last!.time + 120, left: 90, right: 90, main: true)
+    samples += tail
+    let r = DeviceReport.build(device: device(), samples: samples, now: samples.last!.time)
+    #expect(r.drain[.listening]!.hours > 4)
+    #expect(r.remainingHours != nil)
+    #expect(r.levels.map(\.channel) == [.main])
+}
+
+@Test func timeLeftUsesBudThatDiesFirst() {
+    // Left at 50% draining slowly, right at 60% draining fast.
+    let samples = lrSamples([(3, .listening, 5, 20)], left: 65, right: 120)
+    let r = DeviceReport.build(device: device("AirPods Pro"), samples: samples, now: samples.last!.time)
+    let right = Double(samples.last!.right!) / 20
+    #expect(abs(r.remainingHours! - right) < 0.5)
+}
+
+@Test func briefDataDoesNotOverrideLongHistory() {
+    // Left: ~10h at 10%/h across several charges. Right: one short burst at a high rate.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<3 {
+        let run = lrSamples([(3.3, .listening, 10, 10)], start: t)
+        samples += run.map { var s = $0; s.right = nil; return s }
+        t = run.last!.time + 6 * 3600
+    }
+    let burst = lrSamples([(0.6, .listening, 19, 19)], start: t)
+    samples += burst.map { var s = $0; s.left = nil; return s }
+    let r = DeviceReport.build(device: device("AirPods Pro"), samples: samples, now: samples.last!.time)
+    #expect(abs(r.drain[.listening]!.ratePerHour! - 10) < 1)
+}
+
+@Test func oldIdleDataStillShownWhenRecentListeningExists() {
+    let now = Date(timeIntervalSince1970: 1_750_000_000)
+    var samples = lrSamples([(20, .idle, 3, 3)], start: now - 40 * 86400, main: true)
+    samples += lrSamples([(3, .listening, 20, 20)], start: now - 3 * 3600, main: true)
+    let r = DeviceReport.build(device: device(), samples: samples, now: now)
+    #expect(r.basisDays == 30)
+    #expect(abs(r.drain[.idle]!.ratePerHour! - 3) < 0.5)
+}
+
+@Test func cyclesCountPartialSteps() {
+    // 1.5h sessions with 10% steps: each shows 100 -> 80, but step-to-step only spans 90 -> 80.
+    var sim = Simulator()
+    sim.step = 10
+    for _ in 0..<5 {
+        sim.level = 100
+        sim.run(hours: 1.5, ratePerHour: 20, state: .listening)
+        sim.disconnect(hours: 2)
+    }
+    let r = DeviceReport.build(device: device(), samples: sim.samples, now: sim.time)
+    #expect(abs(r.trackedCycles - 1.0) < 0.01)
+}
+
+@Test func missingValuesDoNotBreakRuns() {
+    var sim = Simulator()
+    sim.run(hours: 3, ratePerHour: 20, state: .listening)
+    // Every 7th reading has no battery value.
+    for i in sim.samples.indices where i % 7 == 3 { sim.samples[i].main = nil }
+    let d = Analysis.drain(Analysis.intervals(sim.samples, channel: .main))
+    #expect(d[.listening]!.hours > 2.8)
+    #expect(abs(d[.listening]!.ratePerHour! - 20) < 1)
+}

@@ -37,7 +37,8 @@ public struct DeviceReport: Sendable {
     /// Batteries this device reports (main, or left + right).
     public var channels: [Channel]
 
-    /// Window the headline numbers are based on (last 30 days if enough data, else all time).
+    /// Window the listening and health numbers are based on (last 30 days if enough data, else all time).
+    /// Other activities pick their own window the same way.
     public var basisDays: Int?
     /// Drain per state for the worst battery (the one that dies first).
     public var drain: [UsageState: StateDrain]
@@ -45,6 +46,8 @@ public struct DeviceReport: Sendable {
     public var drainByChannel: [Channel: [UsageState: StateDrain]]
     /// Drain across all states combined: how long a charge lasts with the user's real habits.
     public var mixed: StateDrain
+    /// Window for `mixed` and `idleShareOfDrain` (30 when based on the last 30 days, nil for all time).
+    public var mixBasisDays: Int?
 
     /// Idle drain split by whether the buds were in the ears. Only for earbuds that report wearing.
     public var idleWorn: StateDrain?
@@ -73,43 +76,53 @@ extension DeviceReport {
                              calendar: Calendar = .current) -> DeviceReport {
         let latest = samples.last
         let isConnected = connected ?? latest.map { now.timeIntervalSince($0.time) <= Analysis.maxGap } ?? false
-        // AirPods-style devices report each bud; plain headsets report one value.
-        let hasBuds = samples.contains { $0.left != nil || $0.right != nil }
-        let channels = (hasBuds ? [Channel.left, .right] : [.main])
-            .filter { ch in samples.contains { $0.value(ch) != nil } }
+        // Analyze every battery that has data. Galaxy Buds report one level for the pair (always) and
+        // each bud (when Samsung's channel is available), so they get all three series.
+        let channels = Channel.allCases.filter { ch in samples.contains { $0.value(ch) != nil } }
+        let all = Dictionary(uniqueKeysWithValues: channels.map { ($0, Analysis.intervals(samples, channel: $0)) })
 
-        let intervalsByChannel = Dictionary(uniqueKeysWithValues: channels.map {
-            ($0, Analysis.intervals(samples, channel: $0))
-        })
-
-        // Prefer the last 30 days so the numbers reflect the battery as it is now.
+        // Prefer the last 30 days so the numbers reflect the battery as it is now, but only for an
+        // activity that has enough recent data. Otherwise fall back to all tracked history.
         let recentCutoff = now.addingTimeInterval(-30 * 86400)
-        let recent = intervalsByChannel.mapValues { $0.filter { $0.start >= recentCutoff } }
-        let recentListening = worst(recent.mapValues(Analysis.drain), .listening)
-        let useRecent = recentListening.hasEnoughData && recentListening.drop >= 15
-        let basis = useRecent ? recent : intervalsByChannel
-        let basisDays: Int? = useRecent ? 30 : nil
+        let recent = all.mapValues { $0.filter { $0.start >= recentCutoff } }
+        let recentDrain = recent.mapValues(Analysis.drain)
+        let allDrain = all.mapValues(Analysis.drain)
+        func useRecent(_ d: StateDrain) -> Bool { d.hasEnoughData && d.drop >= 15 }
 
-        let drainByChannel = basis.mapValues(Analysis.drain)
+        var drainByChannel: [Channel: [UsageState: StateDrain]] = [:]
+        var recentStates = Set<UsageState>()
+        for state in UsageState.allCases {
+            let recentForState = useRecent(worst(recentDrain, state))
+            if recentForState { recentStates.insert(state) }
+            for (ch, byState) in recentForState ? recentDrain : allDrain {
+                drainByChannel[ch, default: [:]][state] = byState[state]
+            }
+        }
         var drain: [UsageState: StateDrain] = [:]
         for state in UsageState.allCases {
             drain[state] = worst(drainByChannel, state)
         }
-        let worstChannel = worstChannel(drainByChannel)
-        let mixed = worstChannel.map { ch in
-            (drainByChannel[ch] ?? [:]).values.reduce(StateDrain(), +)
-        } ?? StateDrain()
+        let basisDays: Int? = recentStates.contains(.listening) ? 30 : nil
+
+        // Real-mix runtime and idle share come from one window so the shares add up.
+        let recentMixed = worstChannel(recentDrain).map { total(recentDrain[$0]) } ?? StateDrain()
+        let mixRecent = useRecent(recentMixed)
+        let mixSource = mixRecent ? recentDrain : allDrain
+        let mixChannel = worstChannel(mixSource)
+        let mixed = mixChannel.map { total(mixSource[$0]) } ?? StateDrain()
         let idleShare: Double? = mixed.drop >= StateDrain.minDrop
-            ? (worstChannel.flatMap { drainByChannel[$0]?[.idle]?.drop } ?? 0) / mixed.drop
+            ? (mixChannel.flatMap { mixSource[$0]?[.idle]?.drop } ?? 0) / mixed.drop
             : nil
 
         // Idle split by wearing, for whichever battery drains fastest.
+        let idleSource = recentStates.contains(.idle) ? recent : all
         func idleSplit(_ worn: Bool) -> StateDrain? {
-            let byChannel = basis.values.map { list in
-                list.filter { $0.state == .idle && $0.wearing == worn }.reduce(into: StateDrain()) { $0.add($1) }
+            let byChannel = idleSource.mapValues { list in
+                [UsageState.idle: list.filter { $0.state == .idle && $0.wearing == worn }
+                    .reduce(into: StateDrain()) { $0.add($1) }]
             }
-            return byChannel.filter { $0.hours > 0 }
-                .max { ($0.ratePerHour ?? 0, $0.hours) < ($1.ratePerHour ?? 0, $1.hours) }
+            let d = worst(byChannel, .idle)
+            return d.hours > 0 ? d : nil
         }
 
         // Health: measured listening runtime against the manufacturer's rating.
@@ -127,14 +140,13 @@ extension DeviceReport {
         // Weekly trend.
         let weekOf: (Date) -> Date = { calendar.dateInterval(of: .weekOfYear, for: $0)?.start ?? $0 }
         var weeks: [Date: [Channel: [DrainInterval]]] = [:]
-        for (ch, list) in intervalsByChannel {
+        for (ch, list) in all {
             for interval in list { weeks[weekOf(interval.start), default: [:]][ch, default: []].append(interval) }
         }
         let trend = weeks.keys.sorted().map { week -> TrendPoint in
             let byChannel = weeks[week]!.mapValues(Analysis.drain)
             let listening = worst(byChannel, .listening).fullChargeHours
-            let mixedRate = byChannel.values.map { $0.values.reduce(StateDrain(), +) }
-                .compactMap(\.ratePerHour).max()
+            let mixedRate = worstChannel(byChannel).flatMap { total(byChannel[$0]).ratePerHour }
             return TrendPoint(weekStart: week, listeningHours: listening, mixedHours: mixedRate.map { 100 / $0 })
         }
         let slopePoints = trend.compactMap { p in p.listeningHours.map { (x: p.weekStart.timeIntervalSince1970 / 86400, y: $0) } }
@@ -143,24 +155,22 @@ extension DeviceReport {
 
         // Left vs right.
         var rightVsLeft: Double?
-        if let l = drainByChannel[.left].map({ $0.values.reduce(StateDrain(), +) })?.ratePerHour,
-           let r = drainByChannel[.right].map({ $0.values.reduce(StateDrain(), +) })?.ratePerHour, l > 0 {
+        if let l = total(drainByChannel[.left]).ratePerHour, let r = total(drainByChannel[.right]).ratePerHour, l > 0 {
             rightVsLeft = r / l - 1
         }
 
-        // Cycles: average over the reported batteries.
-        let totalDrops = intervalsByChannel.values.map { $0.reduce(0) { $0 + $1.drop } }
-        let trackedCycles = totalDrops.isEmpty ? 0 : totalDrops.reduce(0, +) / Double(totalDrops.count) / 100
+        // Full charges used: every step down while connected, for the most used battery.
+        let trackedCycles = (channels.map { Analysis.totalDrop(samples, channel: $0) }.max() ?? 0) / 100
 
-        // Time left now.
+        // Time left now: whichever battery runs out first at its own rate.
         var remaining: Double?
         if isConnected, let latest {
-            let levels = channels.compactMap { ch in latest.value(ch).map { (ch, $0) } }
-            if let (ch, level) = levels.min(by: { $0.1 < $1.1 }) {
-                let byState = drainByChannel[ch] ?? [:]
-                let rate = byState[latest.state]?.ratePerHour ?? drain[latest.state]?.ratePerHour ?? mixed.ratePerHour
-                remaining = rate.map { Double(level) / $0 }
-            }
+            remaining = displayChannels(latest).compactMap { ch -> Double? in
+                guard let level = latest.value(ch) else { return nil }
+                let rate = drainByChannel[ch]?[latest.state]?.ratePerHour
+                    ?? drain[latest.state]?.ratePerHour ?? mixed.ratePerHour
+                return rate.map { Double(level) / $0 }
+            }.min()
         }
 
         let last7 = samples.filter { $0.time >= now.addingTimeInterval(-7 * 86400) }
@@ -169,6 +179,7 @@ extension DeviceReport {
         return DeviceReport(
             device: device, latest: latest, isConnected: isConnected, channels: channels,
             basisDays: basisDays, drain: drain, drainByChannel: drainByChannel, mixed: mixed,
+            mixBasisDays: mixRecent ? 30 : nil,
             idleWorn: idleSplit(true), idleNotWorn: idleSplit(false), idleShareOfDrain: idleShare,
             connectedHoursLast7Days: Analysis.connectedHours(last7),
             connectedHoursLast30Days: Analysis.connectedHours(last30),
@@ -176,21 +187,41 @@ extension DeviceReport {
             rightVsLeft: rightVsLeft, trackedCycles: trackedCycles, remainingHours: remaining)
     }
 
-    /// The drain for `state` on whichever battery loses charge fastest in that state.
-    private static func worst(_ byChannel: [Channel: [UsageState: StateDrain]], _ state: UsageState) -> StateDrain {
-        let candidates = byChannel.values.compactMap { $0[state] }
-        return candidates.filter(\.hasEnoughData).max { ($0.ratePerHour ?? 0) < ($1.ratePerHour ?? 0) }
-            ?? candidates.max { $0.hours < $1.hours }
-            ?? StateDrain()
+    /// Batteries shown to the user: each bud when the latest reading has them, else the single level.
+    public static func displayChannels(_ sample: Sample) -> [Channel] {
+        sample.left != nil || sample.right != nil ? [.left, .right].filter { sample.value($0) != nil } : [.main]
     }
 
-    /// The battery with the highest overall drain rate.
+    /// Battery levels to show now.
+    public var levels: [(channel: Channel, level: Int)] {
+        guard let latest else { return [] }
+        return Self.displayChannels(latest).compactMap { ch in latest.value(ch).map { (ch, $0) } }
+    }
+
+    /// The drain for `state` on whichever battery loses charge fastest in that state. Only batteries
+    /// with comparable evidence compete, so half an hour on one bud can't outweigh days on the other.
+    private static func worst(_ byChannel: [Channel: [UsageState: StateDrain]], _ state: UsageState) -> StateDrain {
+        let candidates = byChannel.values.compactMap { $0[state] }
+        return fastest(candidates) ?? candidates.max { $0.hours < $1.hours } ?? StateDrain()
+    }
+
+    /// The battery with the highest overall drain rate, among those with comparable evidence.
     private static func worstChannel(_ byChannel: [Channel: [UsageState: StateDrain]]) -> Channel? {
-        byChannel.max { a, b in
-            let ra = a.value.values.reduce(StateDrain(), +)
-            let rb = b.value.values.reduce(StateDrain(), +)
-            return (ra.ratePerHour ?? -1, ra.hours) < (rb.ratePerHour ?? -1, rb.hours)
-        }?.key
+        let totals = byChannel.mapValues { total($0) }
+        if let best = fastest(Array(totals.values)) {
+            return totals.first { $0.value == best }?.key
+        }
+        return totals.max { $0.value.hours < $1.value.hours }?.key
+    }
+
+    private static func fastest(_ candidates: [StateDrain]) -> StateDrain? {
+        let enough = candidates.filter(\.hasEnoughData)
+        let maxDrop = enough.map(\.drop).max() ?? 0
+        return enough.filter { $0.drop >= 0.25 * maxDrop }.max { ($0.ratePerHour ?? 0) < ($1.ratePerHour ?? 0) }
+    }
+
+    private static func total(_ byState: [UsageState: StateDrain]?) -> StateDrain {
+        (byState ?? [:]).values.reduce(StateDrain(), +)
     }
 }
 

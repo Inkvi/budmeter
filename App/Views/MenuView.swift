@@ -7,9 +7,7 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        let lowest = monitor.connected.compactMap { report in
-            report.channels.compactMap { report.latest?.value($0) }.min()
-        }.min()
+        let lowest = monitor.connected.compactMap { $0.levels.map(\.level).min() }.min()
         HStack(spacing: 3) {
             Image(systemName: "earbuds")
             if let lowest { Text("\(lowest)%") }
@@ -94,6 +92,7 @@ struct MenuView: View {
         }
         .padding(14)
         .frame(width: 340)
+        .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
     }
 }
 

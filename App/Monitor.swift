@@ -34,6 +34,9 @@ final class Monitor {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var watcher: Bluetooth.ConnectWatcher?
     @ObservationIgnored private let galaxy = GalaxyBuds()
+    /// Keeps App Nap from stretching the poll timer, which would split sessions.
+    @ObservationIgnored private let activity = ProcessInfo.processInfo.beginActivity(
+        options: .userInitiatedAllowingIdleSystemSleep, reason: "Recording earbud battery levels")
 
     init() {
         do {
@@ -90,10 +93,6 @@ final class Monitor {
                                 right: device.right, caseLevel: device.caseLevel, state: state,
                                 wearing: device.wearing)
             do {
-                if lastWritten[device.address] == nil {
-                    try store.upsertDevice(address: device.address, name: device.name,
-                                           productID: device.productID, seen: now)
-                }
                 if let last = lastWritten[device.address], !sample.differs(from: last),
                    now.timeIntervalSince(last.time) < heartbeat {
                     pending[device.address] = sample
@@ -116,6 +115,10 @@ final class Monitor {
         for address in lastWritten.keys where !connectedNow.contains(address) {
             if let sample = pending.removeValue(forKey: address) { try? store.insert(sample) }
             lastWritten[address] = nil
+        }
+        // Close the Samsung channel only on a real disconnect, not when battery briefly reads as unknown.
+        let linked = Set(live.filter(\.isConnected).map(\.address))
+        for address in wasConnected where !linked.contains(address) {
             galaxy.disconnect(address: address)
             changed.insert(address)
         }
