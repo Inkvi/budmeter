@@ -32,6 +32,7 @@ struct DashboardView: View {
         }
         .onAppear {
             selectDefault()
+            monitor.refreshAll()
             // Show in the Dock while the dashboard is open.
             NSApp.setActivationPolicy(.regular)
             DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }

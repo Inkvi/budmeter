@@ -212,8 +212,11 @@ private struct RatingEditor: View {
             }
             Text("From the manufacturer, noise cancelling on.").font(.callout).foregroundStyle(.secondary)
             if device.ratedHoursOverride != nil {
-                Button("Use built-in value") { monitor.setRatedHours(nil, for: device.address) }
-                    .buttonStyle(.link)
+                Button("Use built-in value") {
+                    text = ""   // so closing the popover doesn't save the old value again
+                    monitor.setRatedHours(nil, for: device.address)
+                }
+                .buttonStyle(.link)
             }
         }
         .padding(14)
@@ -221,12 +224,12 @@ private struct RatingEditor: View {
         .onDisappear(perform: save)
     }
 
-    /// Empty restores the built-in value; anything that isn't a positive number is ignored.
+    /// Empty restores the built-in value; anything that isn't a plausible number of hours is ignored.
     private func save() {
         let t = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
         if t.isEmpty {
             if device.ratedHoursOverride != nil { monitor.setRatedHours(nil, for: device.address) }
-        } else if let value = Double(t), value > 0, value != device.ratedHours {
+        } else if let value = Double(t), Device.ratedHoursRange.contains(value), value != device.ratedHours {
             monitor.setRatedHours(value, for: device.address)
         }
     }
@@ -417,7 +420,7 @@ private struct HistorySection: View {
                     ForEach(UsageState.allCases, id: \.self) { s in
                         LegendItem(color: s.color.opacity(0.5), text: s.label)
                     }
-                    if report.levels.count > 1 {
+                    if samples.contains(where: { $0.right != nil }) {
                         LegendItem(color: .secondary, text: "Right bud", dashed: true)
                     }
                 }
@@ -444,19 +447,18 @@ private struct HistorySection: View {
         return out
     }
 
-    /// Battery lines for the batteries shown at the top, broken at disconnects so they don't bridge gaps.
+    /// Battery lines: each bud where the reading has them, otherwise the single level. Each line breaks
+    /// at its own gaps and at new sessions, so it never bridges time it has no data for.
     private var points: [Point] {
-        let channels = report.levels.map(\.channel)
         var out: [Point] = []
-        var segment = 0
-        var previous: Date?
+        var segment: [Channel: Int] = [:]
+        var previous: [Channel: Date] = [:]
         for s in samples {
-            if let previous, s.time.timeIntervalSince(previous) > Analysis.maxGap { segment += 1 }
-            previous = s.time
-            for ch in channels {
-                if let v = s.value(ch) {
-                    out.append(Point(time: s.time, level: v, series: "\(ch.rawValue)-\(segment)", channel: ch))
-                }
+            for ch in DeviceReport.displayChannels(s) {
+                guard let v = s.value(ch) else { continue }
+                if let p = previous[ch], !Analysis.continues(from: p, to: s) { segment[ch, default: 0] += 1 }
+                previous[ch] = s.time
+                out.append(Point(time: s.time, level: v, series: "\(ch.rawValue)-\(segment[ch, default: 0])", channel: ch))
             }
         }
         return out

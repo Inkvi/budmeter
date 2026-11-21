@@ -110,8 +110,14 @@ extension DeviceReport {
         let mixSource = mixRecent ? recentDrain : allDrain
         let mixChannel = worstChannel(mixSource)
         let mixed = mixChannel.map { total(mixSource[$0]) } ?? StateDrain()
-        let idleShare: Double? = mixed.drop >= StateDrain.minDrop
-            ? (mixChannel.flatMap { mixSource[$0]?[.idle]?.drop } ?? 0) / mixed.drop
+        // Share of battery spent idle counts every observed drop, including sessions too short to
+        // measure a rate, in the same window as the real mix.
+        let shareChannel = mixChannel ?? channels.first
+        let drops = shareChannel.map { Analysis.observedDrops(samples, channel: $0) }?
+            .filter { !mixRecent || $0.time >= recentCutoff } ?? []
+        let droppedTotal = drops.reduce(0) { $0 + $1.drop }
+        let idleShare: Double? = droppedTotal >= StateDrain.minDrop
+            ? drops.filter { $0.state == .idle }.reduce(0) { $0 + $1.drop } / droppedTotal
             : nil
 
         // Idle split by wearing, for whichever battery drains fastest.
@@ -153,9 +159,16 @@ extension DeviceReport {
         let spanDays = (slopePoints.last?.x ?? 0) - (slopePoints.first?.x ?? 0)
         let minutesPerMonth = spanDays >= 21 ? Analysis.slope(slopePoints).map { $0 * 30 * 60 } : nil
 
-        // Left vs right.
+        // Left vs right, compared within the same activity so that, say, calls on one bud only
+        // don't look like a weaker battery. Uses the activity with the most data on both buds.
         var rightVsLeft: Double?
-        if let l = total(drainByChannel[.left]).ratePerHour, let r = total(drainByChannel[.right]).ratePerHour, l > 0 {
+        let paired = UsageState.allCases.compactMap { state -> (l: StateDrain, r: StateDrain)? in
+            guard let l = drainByChannel[.left]?[state], let r = drainByChannel[.right]?[state],
+                  l.hasEnoughData, r.hasEnoughData else { return nil }
+            return (l, r)
+        }
+        if let best = paired.max(by: { min($0.l.drop, $0.r.drop) < min($1.l.drop, $1.r.drop) }),
+           let l = best.l.ratePerHour, let r = best.r.ratePerHour, l > 0 {
             rightVsLeft = r / l - 1
         }
 
@@ -164,9 +177,12 @@ extension DeviceReport {
 
         // Time left now: whichever battery runs out first at its own rate.
         var remaining: Double?
-        if isConnected, let latest {
+        if isConnected, let latest, latest.inCase != true {
             remaining = displayChannels(latest).compactMap { ch -> Double? in
                 guard let level = latest.value(ch) else { return nil }
+                // Skip a bud that is charging (level went up since its previous reading).
+                if let previous = samples.dropLast().last(where: { $0.value(ch) != nil })?.value(ch),
+                   level > previous { return nil }
                 let rate = drainByChannel[ch]?[latest.state]?.ratePerHour
                     ?? drain[latest.state]?.ratePerHour ?? mixed.ratePerHour
                 return rate.map { Double(level) / $0 }

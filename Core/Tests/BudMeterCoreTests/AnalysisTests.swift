@@ -373,3 +373,115 @@ private func lrSamples(_ segments: [(hours: Double, state: UsageState, leftRate:
     try store.insert(s)
     #expect(try store.samples(address: "a") == [s])
 }
+
+// Regression tests from the second code review.
+
+private func s(_ t: Date, main: Int? = nil, left: Int? = nil, right: Int? = nil, _ state: UsageState,
+               inCase: Bool? = nil, start: Bool = false) -> Sample {
+    Sample(time: t, address: "x", main: main, left: left, right: right, state: state, inCase: inCase, sessionStart: start)
+}
+
+@Test func coarseStepIsSharedAcrossActivities() {
+    // Battery falls 10 points every 30 minutes; each half hour is 29 min listening then 1 min idle.
+    var samples: [Sample] = []
+    let t0 = Date(timeIntervalSince1970: 1_750_000_000)
+    for minute in 0...120 {
+        let level = 100 - (minute / 30) * 10
+        let state: UsageState = minute % 30 == 29 ? .idle : .listening
+        samples.append(s(t0 + Double(minute) * 60, main: level, state))
+    }
+    let d = Analysis.drain(Analysis.intervals(samples, channel: .main))
+    #expect(d[.listening]!.drop > 25)          // used to be 0, with all 30 points on 3 idle minutes
+    #expect((d[.idle]?.drop ?? 0) < 3)
+}
+
+@Test func mixedSpansLearnFromPureOnes() {
+    // Pure idle spans at 2%/h teach the idle rate; mixed spans then give listening the rest.
+    var sim = Simulator()
+    sim.run(hours: 10, ratePerHour: 2, state: .idle)
+    for _ in 0..<6 {
+        sim.run(hours: 0.5, ratePerHour: 20, state: .listening)
+        sim.run(hours: 0.25, ratePerHour: 2, state: .idle)
+    }
+    let d = Analysis.drain(Analysis.intervals(sim.samples, channel: .main))
+    #expect(abs(d[.idle]!.ratePerHour! - 2) < 0.6)
+    #expect(abs(d[.listening]!.ratePerHour! - 20) < 2.5)
+}
+
+@Test func shortDisconnectEndsTheSession() {
+    let t0 = Date(timeIntervalSince1970: 1_750_000_000)
+    let samples = [
+        s(t0, main: 80, .listening, start: true), s(t0 + 60, main: 80, .listening), s(t0 + 120, main: 79, .listening),
+        // 4 minutes away, used on the phone: 10 points gone.
+        s(t0 + 360, main: 69, .listening, start: true), s(t0 + 420, main: 69, .listening), s(t0 + 480, main: 68, .listening),
+    ]
+    #expect(Analysis.totalDrop(samples, channel: .main) == 2)
+    #expect(abs(Analysis.connectedHours(samples)[.listening]! - 4.0 / 60) < 0.001)
+    #expect(Analysis.intervals(samples, channel: .main).isEmpty)
+}
+
+@Test func flatTimeInTheCaseIsNotDrain() {
+    let t0 = Date(timeIntervalSince1970: 1_750_000_000)
+    var samples: [Sample] = []
+    for i in 0..<10 { samples.append(s(t0 + Double(i) * 120, main: 90 - i, .idle)) }
+    for i in 10..<28 { samples.append(s(t0 + Double(i) * 120, main: 81, .idle, inCase: true)) }   // 36 min in the case
+    for i in 28..<38 { samples.append(s(t0 + Double(i) * 120, main: 81 - (i - 27), .idle)) }
+    let d = Analysis.drain(Analysis.intervals(samples, channel: .main))
+    #expect(d[.idle]!.hours < 0.65)   // two 18-minute runs, not 74 minutes
+}
+
+@Test func idleShareCountsSingleDropSessions() {
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<10 {   // ten idle sessions, each a single 10-point step
+        samples.append(s(t, main: 100, .idle, start: true)); samples.append(s(t + 120, main: 90, .idle))
+        t += 3600
+    }
+    var sim = Simulator()
+    sim.time = t
+    sim.run(hours: 4, ratePerHour: 20, state: .listening)
+    samples += sim.samples
+    let r = DeviceReport.build(device: device(), samples: samples, now: sim.time)
+    #expect(r.idleShareOfDrain! > 0.5)
+}
+
+@Test func leftRightComparesTheSameActivity() {
+    // Both buds drain identically while listening; only the right bud takes calls.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    var l = 100.0, r = 100.0
+    for _ in 0..<90 { samples.append(s(t, left: Int(l.rounded(.up)), right: Int(r.rounded(.up)), .listening)); t += 120; l -= 0.5; r -= 0.5 }
+    for _ in 0..<30 { samples.append(s(t, left: nil, right: Int(r.rounded(.up)), .call)); t += 120; r -= 1 }
+    let rep = DeviceReport.build(device: device("AirPods Pro"), samples: samples, now: t)
+    #expect(abs(rep.rightVsLeft ?? 1) < 0.05)
+}
+
+@Test func timeLeftIgnoresAChargingBud() {
+    let t0 = Date(timeIntervalSince1970: 1_750_000_000)
+    var samples = lrSamples([(3, .listening, 10, 10)], start: t0)
+    let t = samples.last!.time, left = samples.last!.left!
+    samples.append(s(t + 120, left: left, right: 15, .listening))   // right went into the case at 15%...
+    samples.append(s(t + 240, left: left, right: 18, .listening))   // ...and is charging
+    let rep = DeviceReport.build(device: device("AirPods Pro"), samples: samples, now: t + 240)
+    #expect(abs(rep.remainingHours! - Double(left) / 10) < 0.6)   // the left bud, not the charging right one
+}
+
+@Test func implausibleRatedHoursAreIgnored() {
+    var d = device()
+    d.ratedHoursOverride = 1e-20
+    #expect(d.ratedHours == 5)   // falls back to the built-in rating
+    d.ratedHoursOverride = 7
+    #expect(d.ratedHours == 7)
+}
+
+@Test func storeKeepsSessionStart() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite").path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let store = try Store(path: path)
+    let a = s(Date(timeIntervalSince1970: 1), main: 50, .idle, start: true)
+    let b = s(Date(timeIntervalSince1970: 61), main: 50, .idle)
+    try store.record(a, name: "Buds", productID: nil)
+    try store.insert(b)
+    #expect(try store.samples(address: "x") == [a, b])
+    #expect(try store.devices().first?.name == "Buds")
+}

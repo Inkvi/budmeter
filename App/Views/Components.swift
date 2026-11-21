@@ -16,7 +16,8 @@ enum Format {
     }
 
     static func percent(_ fraction: Double) -> String {
-        "\(Int((fraction * 100).rounded()))%"
+        guard fraction.isFinite else { return "—" }
+        return "\(Int(min(max(fraction * 100, -9999), 9999).rounded()))%"
     }
 
     static func ago(_ date: Date) -> String {

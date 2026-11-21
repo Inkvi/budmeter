@@ -44,9 +44,12 @@ public struct Sample: Sendable, Equatable {
     public var wearing: Bool?
     /// Both buds are in the charging case. Only known for earbuds that report it (Galaxy Buds).
     public var inCase: Bool?
+    /// First reading after a connect, wake or app start. Nothing before it continues into it.
+    public var sessionStart: Bool
 
     public init(time: Date, address: String, main: Int? = nil, left: Int? = nil, right: Int? = nil,
-                caseLevel: Int? = nil, state: UsageState, wearing: Bool? = nil, inCase: Bool? = nil) {
+                caseLevel: Int? = nil, state: UsageState, wearing: Bool? = nil, inCase: Bool? = nil,
+                sessionStart: Bool = false) {
         self.time = time
         self.address = address
         self.main = main
@@ -56,6 +59,7 @@ public struct Sample: Sendable, Equatable {
         self.state = state
         self.wearing = wearing
         self.inCase = inCase
+        self.sessionStart = sessionStart
     }
 
     public func value(_ channel: Channel) -> Int? {
@@ -96,7 +100,11 @@ public struct Device: Sendable, Equatable, Identifiable {
         self.ratedHoursOverride = ratedHoursOverride
     }
 
+    /// Plausible rated listening time per charge, in hours.
+    public static let ratedHoursRange: ClosedRange<Double> = 0.5...100
+
     public var ratedHours: Double? {
-        ratedHoursOverride ?? DeviceSpecs.ratedListeningHours(name: name, productID: productID)
+        ratedHoursOverride.flatMap { Self.ratedHoursRange.contains($0) ? $0 : nil }
+            ?? DeviceSpecs.ratedListeningHours(name: name, productID: productID)
     }
 }

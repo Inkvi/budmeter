@@ -37,6 +37,7 @@ public final class Store {
         // Added after the first version; fails harmlessly when the column exists.
         try? exec("ALTER TABLE samples ADD COLUMN wearing INTEGER")
         try? exec("ALTER TABLE samples ADD COLUMN in_case INTEGER")
+        try? exec("ALTER TABLE samples ADD COLUMN session_start INTEGER")
     }
 
     deinit { sqlite3_close(db) }
@@ -78,19 +79,32 @@ public final class Store {
     // MARK: Samples
 
     public func insert(_ sample: Sample) throws {
-        try run("INSERT INTO samples (address, time, main, left_level, right_level, case_level, state, wearing, in_case) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        try run("INSERT INTO samples (address, time, main, left_level, right_level, case_level, state, wearing, in_case, session_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [sample.address, sample.time.timeIntervalSince1970, sample.main, sample.left, sample.right,
                  sample.caseLevel, sample.state.rawValue, sample.wearing.map { $0 ? 1 : 0 },
-                 sample.inCase.map { $0 ? 1 : 0 }])
+                 sample.inCase.map { $0 ? 1 : 0 }, sample.sessionStart ? 1 : nil])
+    }
+
+    /// Saves a reading and refreshes the device's name and last-seen time in one transaction.
+    public func record(_ sample: Sample, name: String, productID: Int?) throws {
+        try exec("BEGIN")
+        do {
+            try insert(sample)
+            try upsertDevice(address: sample.address, name: name, productID: productID, seen: sample.time)
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
     }
 
     public func samples(address: String, since: Date = .distantPast) throws -> [Sample] {
-        try query("SELECT time, main, left_level, right_level, case_level, state, wearing, in_case FROM samples WHERE address = ? AND time >= ? ORDER BY time",
+        try query("SELECT time, main, left_level, right_level, case_level, state, wearing, in_case, session_start FROM samples WHERE address = ? AND time >= ? ORDER BY time",
                   [address, since.timeIntervalSince1970]) { s in
             Sample(time: Date(timeIntervalSince1970: sqlite3_column_double(s, 0)), address: address,
                    main: int(s, 1), left: int(s, 2), right: int(s, 3), caseLevel: int(s, 4),
                    state: UsageState(rawValue: text(s, 5)) ?? .idle, wearing: int(s, 6).map { $0 != 0 },
-                   inCase: int(s, 7).map { $0 != 0 })
+                   inCase: int(s, 7).map { $0 != 0 }, sessionStart: int(s, 8) == 1)
         }
     }
 
@@ -126,7 +140,12 @@ public final class Store {
         let stmt = try prepare(sql, params)
         defer { sqlite3_finalize(stmt) }
         var out: [T] = []
-        while sqlite3_step(stmt) == SQLITE_ROW { out.append(row(stmt)) }
+        var result = sqlite3_step(stmt)
+        while result == SQLITE_ROW {
+            out.append(row(stmt))
+            result = sqlite3_step(stmt)
+        }
+        guard result == SQLITE_DONE else { throw error() }  // never return part of a result as if complete
         return out
     }
 

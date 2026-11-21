@@ -68,7 +68,7 @@ final class GalaxyBuds: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     func rfcommChannelData(_ rfcommChannel: IOBluetoothRFCOMMChannel!, data dataPointer: UnsafeMutableRawPointer!,
                            length dataLength: Int) {
-        guard let address = rfcommChannel.getDevice()?.addressString?.lowercased() else { return }
+        guard let address = current(rfcommChannel) else { return }
         var buffer = buffers[address, default: Data()]
         buffer.append(Data(bytes: dataPointer, count: dataLength))
         for (id, payload) in GalaxyProtocol.extractMessages(&buffer) {
@@ -78,7 +78,7 @@ final class GalaxyBuds: NSObject, IOBluetoothRFCOMMChannelDelegate {
     }
 
     func rfcommChannelClosed(_ rfcommChannel: IOBluetoothRFCOMMChannel!) {
-        guard let address = rfcommChannel.getDevice()?.addressString?.lowercased() else { return }
+        guard let address = current(rfcommChannel) else { return }
         channels[address] = nil
         status[address] = nil
         buffers[address] = nil
@@ -86,5 +86,13 @@ final class GalaxyBuds: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     func rfcommChannelOpenComplete(_ rfcommChannel: IOBluetoothRFCOMMChannel!, status error: IOReturn) {
         if error != kIOReturnSuccess { rfcommChannelClosed(rfcommChannel) }
+    }
+
+    /// The device address, only if this is still the channel we use for it. Late callbacks from a
+    /// replaced channel are ignored so they can't clear or feed the new one.
+    private func current(_ channel: IOBluetoothRFCOMMChannel) -> String? {
+        guard let address = channel.getDevice()?.addressString?.lowercased(),
+              channels[address] === channel else { return nil }
+        return address
     }
 }

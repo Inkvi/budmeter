@@ -47,6 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    /// Logout, restart and shutdown send a quit event with a reason. The SDK documents it as a
+    /// parameter; older code reads it as an attribute, so check both.
+    private static func isSystemQuit() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        let reason = event.paramDescriptor(forKeyword: kAEQuitReason) ?? event.attributeDescriptor(forKeyword: kAEQuitReason)
+        return reason != nil
+    }
+
     static func closeDashboard() {
         for window in NSApp.windows where window.identifier?.rawValue.hasPrefix("dashboard") == true {
             window.close()
@@ -54,15 +62,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Logout, restart and shutdown send a quit event with a reason; let those through.
-        let systemQuit = NSAppleEventManager.shared().currentAppleEvent?
-            .attributeDescriptor(forKeyword: kAEQuitReason) != nil
-        if Self.allowQuit || systemQuit { return .terminateNow }
+        if Self.allowQuit || Self.isSystemQuit() { return .terminateNow }
         Self.closeDashboard()
         return .terminateCancel
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Belt and braces: never block a shutdown or logout.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification,
+                                                          object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppDelegate.allowQuit = true }
+        }
         // Show the dashboard once on first launch so it's clear where the app lives.
         if !UserDefaults.standard.bool(forKey: "launchedBefore") {
             UserDefaults.standard.set(true, forKey: "launchedBefore")
