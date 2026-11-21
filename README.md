@@ -64,6 +64,6 @@ open --env BUDMETER_DB=/tmp/budmeter-demo.sqlite build/Build/Products/Debug/BudM
 Layout:
 
 - `design/icon-artwork.png`: source art for the app icon; `swift scripts/make-icon.swift` turns it into the icon set.
-- `design/devices/`: a picture per earbud family (Galaxy Buds3, Galaxy Buds2, AirPods Pro, ...); `swift scripts/make-device-images.swift` trims them into the asset catalog. `EarbudModel.swift` maps device names and Apple product IDs to a family.
+- `design/devices/`: a picture per earbud family (33 of them: AirPods and Beats, Galaxy Buds, Pixel Buds, Sony, Nothing and CMF, Bose, Jabra, Sennheiser, OnePlus, Soundcore, Shokz, Huawei, plus generic earbuds and headphones); `swift scripts/make-device-images.swift` trims them into the asset catalog. `EarbudModel.swift` maps device names and Apple product IDs to a family.
 - `Core/`: Swift package with the models, SQLite store and all analysis (`Analysis.swift`, `Report.swift`), plus tests.
 - `App/`: the menu bar app. `Bluetooth.swift` (IOBluetooth and CoreAudio), `GalaxyBuds.swift` (Samsung channel), `Monitor.swift` (polling and recording), `Views/`.

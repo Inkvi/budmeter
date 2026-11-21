@@ -297,9 +297,40 @@ private func lrSamples(_ segments: [(hours: Double, state: UsageState, leftRate:
     #expect(EarbudModel.detect(name: "Galaxy Buds3 Pro (7A75)", productID: nil) == .galaxyBuds3)
     #expect(EarbudModel.detect(name: "Galaxy Buds2 Pro", productID: nil) == .galaxyBuds2)
     #expect(EarbudModel.detect(name: "Sam's Pixel Buds A-Series", productID: nil) == .pixelBudsA)
-    #expect(EarbudModel.detect(name: "Pixel Buds Pro 2", productID: nil) == .pixelBudsPro)
-    #expect(EarbudModel.detect(name: "Sam's Bose QC35 II", productID: nil) == .headphones)
+    #expect(EarbudModel.detect(name: "Pixel Buds Pro", productID: nil) == .pixelBudsPro)
+    #expect(EarbudModel.detect(name: "Sam's Bose QC35 II", productID: nil) == .boseHeadphones)
     #expect(EarbudModel.detect(name: "Sam's AirPods", productID: 0x2014) == .airpodsPro)
     #expect(EarbudModel.detect(name: "Sam's AirPods Max", productID: nil) == .airpodsMax)
     #expect(EarbudModel.detect(name: "Some Headset", productID: nil) == .earbuds)
+}
+
+@Test func detectsOtherBrands() {
+    let cases: [(String, Int?, EarbudModel)] = [
+        ("WF-1000XM5", nil, .sonyWFXM5), ("WF-1000XM4", nil, .sonyWFXM4), ("LinkBuds S", nil, .sonyWFXM5),
+        ("LinkBuds", nil, .sonyLinkBuds), ("WH-1000XM5", nil, .sonyWHXM5), ("WH-1000XM4", nil, .sonyWHXM4),
+        ("Nothing Ear (2)", nil, .nothingEar), ("Ear (a)", nil, .nothingEar), ("CMF Buds Pro 2", nil, .cmfBuds),
+        ("Nothing Headphone (1)", nil, .nothingHeadphone),
+        ("Bose QC Ultra Earbuds", nil, .boseQCEarbuds), ("Bose Ultra Open Earbuds", nil, .boseUltraOpen),
+        ("Bose QC Ultra Headphones", nil, .boseHeadphones),
+        ("Beats Fit Pro", nil, .beatsFitPro), ("Sam's Beats", 0x200B, .powerbeatsPro),
+        ("Beats Studio Pro", nil, .beatsHeadphones), ("Beats Studio Buds +", nil, .beatsStudioBuds),
+        ("Galaxy Buds Live", nil, .galaxyBudsLive), ("Galaxy Buds FE", nil, .galaxyBudsFE),
+        ("Pixel Buds Pro 2", nil, .pixelBudsPro2),
+        ("Jabra Elite 10", nil, .jabraElite), ("MOMENTUM TW 4", nil, .sennheiserMomentum),
+        ("Momentum 4", nil, .headphones), ("OnePlus Buds Pro 3", nil, .oneplusBuds),
+        ("Soundcore Liberty 4 NC", nil, .soundcoreLiberty), ("OpenRun Pro 2 by Shokz", nil, .shokzOpenRun),
+        ("HUAWEI FreeBuds Pro 3", nil, .huaweiFreeBudsPro),
+    ]
+    for (name, pid, model) in cases {
+        #expect(EarbudModel.detect(name: name, productID: pid) == model, "\(name)")
+    }
+}
+
+@Test func everyModelHasAPicture() {
+    let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../../../design/devices").standardized
+    for model in EarbudModel.allCases {
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(model.rawValue).png").path),
+                "missing picture for \(model.rawValue)")
+    }
 }
