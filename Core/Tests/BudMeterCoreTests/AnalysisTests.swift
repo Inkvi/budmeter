@@ -292,3 +292,14 @@ private func lrSamples(_ segments: [(hours: Double, state: UsageState, leftRate:
     #expect(d[.listening]!.hours > 2.8)
     #expect(abs(d[.listening]!.ratePerHour! - 20) < 1)
 }
+
+@Test func detectsEarbudModels() {
+    #expect(EarbudModel.detect(name: "Galaxy Buds3 Pro (7A75)", productID: nil) == .galaxyBuds3)
+    #expect(EarbudModel.detect(name: "Galaxy Buds2 Pro", productID: nil) == .galaxyBuds2)
+    #expect(EarbudModel.detect(name: "Sam's Pixel Buds A-Series", productID: nil) == .pixelBudsA)
+    #expect(EarbudModel.detect(name: "Pixel Buds Pro 2", productID: nil) == .pixelBudsPro)
+    #expect(EarbudModel.detect(name: "Sam's Bose QC35 II", productID: nil) == .headphones)
+    #expect(EarbudModel.detect(name: "Sam's AirPods", productID: 0x2014) == .airpodsPro)
+    #expect(EarbudModel.detect(name: "Sam's AirPods Max", productID: nil) == .airpodsMax)
+    #expect(EarbudModel.detect(name: "Some Headset", productID: nil) == .earbuds)
+}

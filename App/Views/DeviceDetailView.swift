@@ -29,16 +29,19 @@ struct DeviceDetailView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(report.device.name).font(.title2.bold())
-            Group {
-                if report.isConnected, let state = report.latest?.state {
-                    Text("Connected · \(state.liveLabel)")
-                } else {
-                    Text("Last connected \(Format.ago(report.device.lastSeen))")
+        HStack(spacing: 14) {
+            DeviceImage(device: report.device, size: 60)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(report.device.name).font(.title2.bold())
+                Group {
+                    if report.isConnected, let state = report.latest?.state {
+                        Text("Connected · \(state.liveLabel)")
+                    } else {
+                        Text("Last connected \(Format.ago(report.device.lastSeen))")
+                    }
                 }
+                .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
         }
     }
 }

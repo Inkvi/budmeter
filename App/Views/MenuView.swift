@@ -46,6 +46,7 @@ struct MenuView: View {
                 Divider()
                 ForEach(others, id: \.device.address) { report in
                     HStack {
+                        DeviceImage(device: report.device, size: 26)
                         Text(report.device.name).lineLimit(1)
                         Spacer()
                         VerdictPill(report: report)
@@ -93,7 +94,8 @@ struct LiveDeviceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack {
+                DeviceImage(device: report.device, size: 34)
                 Text(report.device.name).font(.headline).lineLimit(1)
                 Spacer()
                 if report.latest?.wearing == false {

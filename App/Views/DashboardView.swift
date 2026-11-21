@@ -9,8 +9,8 @@ struct DashboardView: View {
         NavigationSplitView {
             List(monitor.reports, id: \.device.address, selection: $selection) { report in
                 HStack(spacing: 10) {
-                    Image(systemName: "earbuds")
-                        .foregroundStyle(report.isConnected ? Color.accentColor : .secondary)
+                    DeviceImage(device: report.device, size: 40)
+                        .opacity(report.isConnected ? 1 : 0.75)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(report.device.name).lineLimit(1)
                         Text(sidebarSubtitle(report))

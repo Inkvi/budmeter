@@ -157,3 +157,21 @@ struct BatteryRows: View {
         }
     }
 }
+
+/// Product picture for a device (Galaxy Buds3, AirPods Pro, ...).
+struct DeviceImage: View {
+    let device: Device
+    var size: CGFloat = 32
+
+    var body: some View {
+        // A soft tile keeps white earbuds visible on light backgrounds.
+        Image(device.model.imageName)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .padding(size * 0.12)
+            .frame(width: size, height: size)
+            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: size * 0.24))
+            .accessibilityHidden(true)
+    }
+}
