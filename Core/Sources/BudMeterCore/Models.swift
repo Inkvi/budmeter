@@ -42,9 +42,11 @@ public struct Sample: Sendable, Equatable {
     public var state: UsageState
     /// At least one bud is in an ear. Only known for earbuds that report it (Galaxy Buds).
     public var wearing: Bool?
+    /// Both buds are in the charging case. Only known for earbuds that report it (Galaxy Buds).
+    public var inCase: Bool?
 
     public init(time: Date, address: String, main: Int? = nil, left: Int? = nil, right: Int? = nil,
-                caseLevel: Int? = nil, state: UsageState, wearing: Bool? = nil) {
+                caseLevel: Int? = nil, state: UsageState, wearing: Bool? = nil, inCase: Bool? = nil) {
         self.time = time
         self.address = address
         self.main = main
@@ -53,6 +55,7 @@ public struct Sample: Sendable, Equatable {
         self.caseLevel = caseLevel
         self.state = state
         self.wearing = wearing
+        self.inCase = inCase
     }
 
     public func value(_ channel: Channel) -> Int? {
@@ -63,10 +66,11 @@ public struct Sample: Sendable, Equatable {
         }
     }
 
-    /// True when battery, state or case changed compared to `other`.
+    /// True when battery, state, case level or placement changed compared to `other`.
     public func differs(from other: Sample) -> Bool {
         main != other.main || left != other.left || right != other.right
             || caseLevel != other.caseLevel || state != other.state || wearing != other.wearing
+            || inCase != other.inCase
     }
 }
 

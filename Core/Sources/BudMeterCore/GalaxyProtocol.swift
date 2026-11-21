@@ -15,6 +15,11 @@ public enum GalaxyProtocol {
         public var placementRight: Int
 
         public var wearing: Bool { placementLeft == 1 || placementRight == 1 }
+        /// No bud is outside the case: each is in the case (3, or 4 which some firmware sends) or not connected (0).
+        public var inCase: Bool {
+            let placements = [placementLeft, placementRight]
+            return placements.allSatisfy { $0 == 0 || $0 >= 3 } && placements.contains { $0 >= 3 }
+        }
     }
 
     /// Pulls complete messages off the front of `buffer`, leaving any partial message.

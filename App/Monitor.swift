@@ -84,6 +84,7 @@ final class Monitor {
                 live[i].right = status.right
                 live[i].caseLevel = status.caseLevel
                 live[i].wearing = status.wearing
+                live[i].inCase = status.inCase
             }
         }
 
@@ -91,7 +92,7 @@ final class Monitor {
             let state: UsageState = device.inputRunning ? .call : device.outputRunning ? .listening : .idle
             let sample = Sample(time: now, address: device.address, main: device.main, left: device.left,
                                 right: device.right, caseLevel: device.caseLevel, state: state,
-                                wearing: device.wearing)
+                                wearing: device.wearing, inCase: device.inCase)
             do {
                 if let last = lastWritten[device.address], !sample.differs(from: last),
                    now.timeIntervalSince(last.time) < heartbeat {

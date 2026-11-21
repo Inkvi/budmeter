@@ -124,14 +124,23 @@ public enum Analysis {
         return sum
     }
 
-    /// Hours spent connected in each state, regardless of battery data.
+    /// Hours spent connected in each state. Time in the charging case is left out: when the earbuds
+    /// say both buds are in the case, or when the battery level is going up.
     public static func connectedHours(_ samples: [Sample]) -> [UsageState: Double] {
         var out: [UsageState: Double] = [:]
         for (a, b) in zip(samples, samples.dropFirst()) {
             let gap = b.time.timeIntervalSince(a.time)
-            if gap <= maxGap { out[a.state, default: 0] += gap / 3600 }
+            guard gap <= maxGap, a.inCase != true, !isCharging(from: a, to: b) else { continue }
+            out[a.state, default: 0] += gap / 3600
         }
         return out
+    }
+
+    static func isCharging(from a: Sample, to b: Sample) -> Bool {
+        Channel.allCases.contains { ch in
+            guard let va = a.value(ch), let vb = b.value(ch) else { return false }
+            return vb > va
+        }
     }
 
     /// Ordinary least squares slope of y over x. Nil when fewer than 3 points or no spread in x.

@@ -334,3 +334,42 @@ private func lrSamples(_ segments: [(hours: Double, state: UsageState, leftRate:
                 "missing picture for \(model.rawValue)")
     }
 }
+
+@Test func connectedTimeSkipsTheCase() {
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    func add(_ minutes: Int, level: (Int) -> Int, state: UsageState = .idle, inCase: Bool? = nil) {
+        for i in 0..<(minutes / 2) {
+            samples.append(Sample(time: t, address: "x", main: level(i), state: state, inCase: inCase))
+            t += 120
+        }
+    }
+    add(60, level: { 80 - $0 / 3 }, state: .listening)          // 1h listening
+    add(30, level: { _ in 70 }, inCase: true)                     // 30 min in the case, flat
+    add(30, level: { 70 + $0 })                                   // 30 min charging, case status unknown
+    add(60, level: { _ in 100 })                                  // 1h idle out of the case
+    let h = Analysis.connectedHours(samples)
+    #expect(abs(h[.listening]! - 1) < 0.05)
+    #expect(abs(h[.idle]! - 1) < 0.1)
+}
+
+@Test func galaxyInCaseStatus() {
+    func status(_ l: Int, _ r: Int) -> GalaxyProtocol.Status {
+        .init(left: 50, right: 50, caseLevel: nil, placementLeft: l, placementRight: r)
+    }
+    #expect(status(3, 3).inCase)
+    #expect(status(3, 0).inCase)        // other bud not connected
+    #expect(!status(3, 1).inCase)       // one bud still in an ear
+    #expect(!status(2, 3).inCase)       // one bud on the desk
+    #expect(!status(0, 0).inCase)
+}
+
+@Test func storeKeepsInCase() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite").path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let store = try Store(path: path)
+    let s = Sample(time: Date(timeIntervalSince1970: 1), address: "a", left: 50, right: 60, state: .idle,
+                   wearing: false, inCase: true)
+    try store.insert(s)
+    #expect(try store.samples(address: "a") == [s])
+}

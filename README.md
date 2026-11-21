@@ -32,7 +32,7 @@ Every 30 seconds BudMeter checks paired headsets:
 - **Galaxy Buds** also expose Samsung's own Bluetooth channel. BudMeter listens on it, without writing anything, to get each bud's battery at 1% steps, the case battery and whether each bud is in an ear. You can turn this off on the device's page.
 - **Activity** comes from CoreAudio. An open microphone means a call, an open output stream means listening, and anything else is idle.
 
-A reading is saved when anything changes, and every 2 minutes otherwise, to `~/Library/Application Support/BudMeter/budmeter.sqlite`.
+Time in the charging case doesn't count as connected time: Galaxy Buds say when both buds are in the case, and for other earbuds a rising battery level marks charging. A reading is saved when anything changes, and every 2 minutes otherwise, to `~/Library/Application Support/BudMeter/budmeter.sqlite`.
 
 **Drain is measured between battery steps.** Many headsets report battery in 10% steps. Measuring from an arbitrary moment would mix in an unknown part of a step, so within each continuous discharge BudMeter only counts the time from the first observed step down to the last. That avoids a bias from the step size. With 10% steps a single estimate is still coarse, so the numbers settle as more sessions are recorded; the confidence dots show how much battery drop each estimate is based on. Charging (level going up), disconnects, gaps over 6 minutes (for example the Mac sleeping) and sudden jumps end a discharge run and are left out.
 

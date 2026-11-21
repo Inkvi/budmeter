@@ -98,7 +98,10 @@ struct LiveDeviceCard: View {
                 DeviceImage(device: report.device, size: 34)
                 Text(report.device.name).font(.headline).lineLimit(1)
                 Spacer()
-                if report.latest?.wearing == false {
+                if report.latest?.inCase == true {
+                    Label("In case", systemImage: "bolt.fill")
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                } else if report.latest?.wearing == false {
                     Label("Not in ears", systemImage: "ear.trianglebadge.exclamationmark")
                         .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
