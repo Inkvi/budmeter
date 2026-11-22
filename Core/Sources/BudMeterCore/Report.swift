@@ -81,27 +81,22 @@ extension DeviceReport {
         // Analyze every battery that has data. Galaxy Buds report one level for the pair (always) and
         // each bud (when Samsung's channel is available), so they get all three series.
         let channels = Channel.allCases.filter { ch in samples.contains { $0.value(ch) != nil } }
-        let measured = Dictionary(uniqueKeysWithValues: channels.map { ($0, Analysis.intervals(samples, channel: $0)) })
-        // The shape of the charge comes from all history: the steep end is only seen when the
-        // earbuds are used until they die, which is rare. Every interval then carries the curve's
-        // speed at its level, so a window that only saw the middle of the charge still gets the
-        // right full-charge runtime.
-        let curves = measured.mapValues(Analysis.chargeCurve)
-        let all = Dictionary(uniqueKeysWithValues: measured.map { ch, list in
-            (ch, list.map { interval in
-                var interval = interval
-                interval.speed = curves[ch]?.speed(at: interval.level) ?? 1
-                return interval
-            })
+        // The collapse at the end of a charge comes from all history and all of the pair's batteries:
+        // it's only seen when the earbuds are used until they die, which is rare. Readings inside it
+        // say nothing about how fast each activity drains, so the rates are measured above it and
+        // the curve adds its measured time back.
+        let curve = Analysis.chargeCurve(samples, channels: channels, now: now)
+        let all = Dictionary(uniqueKeysWithValues: channels.map {
+            ($0, Analysis.intervals(samples, channel: $0, above: curve.cliff))
         })
         func shaped(_ byChannel: [Channel: [UsageState: StateDrain]]) -> [Channel: [UsageState: StateDrain]] {
-            Dictionary(uniqueKeysWithValues: byChannel.map { ch, byState in
-                (ch, byState.mapValues { d in
+            byChannel.mapValues { byState in
+                byState.mapValues { d in
                     var d = d
-                    d.usable = curves[ch]?.usable ?? 1
+                    d.curve = curve
                     return d
-                })
-            })
+                }
+            }
         }
 
         // Prefer the last 30 days so the numbers reflect the battery as it is now, but only for an
@@ -206,9 +201,9 @@ extension DeviceReport {
                 // Skip a bud that is charging (level went up since its previous reading).
                 if let previous = samples.dropLast().last(where: { $0.value(ch) != nil })?.value(ch),
                    level > previous { return nil }
-                let rate = drainByChannel[ch]?[latest.state]?.referenceRate
-                    ?? drain[latest.state]?.referenceRate ?? mixed.referenceRate
-                return rate.map { (curves[ch] ?? .flat).hoursLeft(from: Double(level), rate: $0) }
+                let rate = drainByChannel[ch]?[latest.state]?.ratePerHour
+                    ?? drain[latest.state]?.ratePerHour ?? mixed.ratePerHour
+                return rate.map { curve.hoursLeft(from: Double(level), rate: $0) }
             }.min()
         }
 
@@ -224,8 +219,7 @@ extension DeviceReport {
             connectedHoursLast30Days: Analysis.connectedHours(last30),
             health: health, verdict: verdict, trend: trend, listeningMinutesPerMonth: minutesPerMonth,
             rightVsLeft: rightVsLeft, trackedCycles: trackedCycles, remainingHours: remaining,
-            fastDrainBelow: drainByChannel.first { $0.value[.listening] == drain[.listening] }
-                .flatMap { curves[$0.key]?.fastBelow })
+            fastDrainBelow: curve.cliff)
     }
 
     /// Batteries shown to the user: each bud when the latest reading has them, else the single level.

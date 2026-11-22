@@ -598,17 +598,17 @@ private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
     var samples: [Sample] = []
     var t = Date(timeIntervalSince1970: 1_750_000_000)
     for _ in 0..<3 { session(&samples, &t, from: 90, to: 60, minutesPerPercent: cliff) }
-    session(&samples, &t, from: 35, to: 1, minutesPerPercent: cliff)
+    session(&samples, &t, from: 45, to: 1, minutesPerPercent: cliff)
 
     let rep = DeviceReport.build(device: device(), samples: samples, now: t)
     let hours = rep.drain[.listening]!.fullChargeHours!
     // Truth: 70% x 3 min + 10 min = 3.67 h. A straight line through all of it said about 4 h.
     #expect(abs(hours - 3.67) < 0.2)
-    #expect(rep.fastDrainBelow == 30)
+    #expect((28...31).contains(rep.fastDrainBelow ?? 0))
     #expect(rep.verdict == .worn)
 
     // At 25% only the steep part is left: minutes, not the 1h15m a straight line would give.
-    let curve = Analysis.chargeCurve(Analysis.intervals(samples, channel: .main))
+    let curve = Analysis.chargeCurve(samples, channels: [.main], now: t)
     #expect(curve.hoursLeft(from: 25, rate: rep.drain[.listening]!.ratePerHour!) < 0.25)
 }
 
@@ -670,4 +670,69 @@ private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
                    s(t + 120, main: 24, .listening, start: true)]
     let drop = Analysis.intervals(samples, channel: .main).reduce(0) { $0 + $1.drop }
     #expect(drop == 4)   // 27 -> 25 -> 23: the first observed step to the last
+}
+
+@Test func misreadingEdgeCases() {
+    let t = Date(timeIntervalSince1970: 1_750_000_000)
+    func drop(_ readings: [(Double, Int?, Bool)]) -> Double {
+        let samples = readings.map { s(t + $0.0, main: $0.1, .listening, start: $0.2) }
+        return Analysis.intervals(samples, channel: .main).reduce(0) { $0 + $1.drop }
+    }
+    // A rebound exactly 2 minutes after the low reading is still a misreading.
+    #expect(drop([(0, 28, true), (180, 27, false), (210, 20, false), (330, 27, false), (510, 26, false)]) == 1)
+    // After a removed dip the discharge carries on: 27 -> 26 -> 25 still counts.
+    #expect(drop([(0, 29, true), (180, 28, false), (360, 27, false), (390, 20, false), (420, 27, false),
+                  (600, 26, false), (780, 25, false)]) == 3)
+    // A reconnect whose first reading is empty still ends the old run: 30 -> 27 stays, nothing is erased.
+    #expect(drop([(0, 31, true), (60, 30, false), (120, 27, false), (150, nil, true), (180, 30, false)]) == 3)
+}
+
+@Test func idleCollapseAfterNormalUseIsFound() {
+    // Like the real Galaxy Buds2 Pro: listening and idle from 49% to 28% at a normal pace, then
+    // 28% -> 1% in 10 minutes while idle. Later a small recharge to 17% drains normally.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<2 { session(&samples, &t, from: 90, to: 60) { _ in 3 } }
+    var level = 49.0
+    var first = true
+    while level > 1 {
+        let state: UsageState = level < 28 ? .idle : (Int(level) % 3 == 0 ? .idle : .listening)
+        samples.append(s(t, main: Int(level.rounded(.up)), state, start: first))
+        first = false
+        level -= level < 28 ? 27.0 / 20 : 0.15   // 20 polls for the collapse; about 3.3 min per 1% before
+        t += 30
+    }
+    samples.append(s(t, main: 1, .idle))
+    t += 3600
+    session(&samples, &t, from: 17, to: 3) { _ in 3 }
+
+    let rep = DeviceReport.build(device: device(), samples: samples, now: t)
+    #expect((26...29).contains(rep.fastDrainBelow ?? 0))
+    #expect(rep.verdict == .worn)
+}
+
+@Test func onlyARealCollapseToEmptyCounts() {
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    // A steady drain from 49% all the way to 1%: no cliff, even though the last step is the end.
+    session(&samples, &t, from: 49, to: 1) { _ in 3 }
+    #expect(Analysis.chargeCurve(samples, channels: [.main], now: t).cliff == nil)
+
+    // A real collapse to empty sets one...
+    session(&samples, &t, from: 49, to: 1, minutesPerPercent: cliff)
+    let found = Analysis.chargeCurve(samples, channels: [.main], now: t)
+    #expect((28...31).contains(found.cliff ?? 0))
+
+    // ...and a later run that went into the case at 2% doesn't clear it.
+    var level = 45
+    var first = true
+    while level > 2 {
+        samples.append(s(t, main: level, .listening, start: first))
+        first = false
+        level -= 1
+        t += 180
+    }
+    samples.append(s(t, main: 2, .idle, inCase: true))
+    t += 3600
+    #expect(Analysis.chargeCurve(samples, channels: [.main], now: t) == found)
 }
