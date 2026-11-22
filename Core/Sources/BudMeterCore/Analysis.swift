@@ -117,9 +117,13 @@ public enum Analysis {
     /// Each step-to-step span is one measurement: we know its total drop, not when inside it the
     /// battery fell. When a span mixes activities, its drop is shared between them in proportion to
     /// how fast each activity drains, estimated from all spans together (see `attribute`).
-    public static func intervals(_ samples: [Sample], channel: Channel) -> [DrainInterval] {
+    ///
+    /// Readings below `cliff` are left out: inside a collapse the drop says nothing about how fast
+    /// each activity drains, and it would skew the shares between them.
+    public static func intervals(_ samples: [Sample], channel: Channel, above cliff: Int? = nil) -> [DrainInterval] {
         var spans: [Span] = []
-        for run in runs(samples, channel: channel) {
+        for whole in runs(samples, channel: channel) {
+            let run = whole.readings.filter { $0.value >= cliff ?? 0 }
             let steps = run.indices.dropFirst().filter { run[$0].value < run[$0 - 1].value }
             for (a, b) in zip(steps, steps.dropFirst()) {
                 let level = Double(run[a].value + run[b].value) / 2
@@ -140,22 +144,29 @@ public enum Analysis {
         public var wearing: Bool?
     }
 
+    public struct Run: Sendable {
+        public var readings: [Reading]
+        /// True when the connection ended right after this run (the earbuds disconnected or died),
+        /// false when it ended any other way, nil when it's the latest run and may still be going.
+        public var endedByDisconnect: Bool?
+    }
+
     /// Continuous discharge runs of one battery: readings from one connection, never rising, outside
     /// the case (see `intervals` for what ends a run).
-    public static func runs(_ samples: [Sample], channel: Channel) -> [[Reading]] {
-        var out: [[Reading]] = []
+    public static func runs(_ samples: [Sample], channel: Channel) -> [Run] {
+        var out: [Run] = []
         var run: [Reading] = []
-        func flush() {
-            if run.count > 1 { out.append(run) }
+        func flush(disconnect: Bool?) {
+            if run.count > 1 { out.append(Run(readings: run, endedByDisconnect: disconnect)) }
             run.removeAll()
         }
         for sample in samples {
             if sample.isInCase(channel) {
-                flush()
+                flush(disconnect: false)
                 continue
             }
             // A new connection ends the run even when its first reading has no value for this battery.
-            if sample.sessionStart { flush() }
+            if sample.sessionStart { flush(disconnect: true) }
             guard let value = sample.value(channel) else { continue }
             // A level that drops at least 3 points and wins back at least half of that within
             // 2 minutes, in the same connection, was a misreading: drop the low readings.
@@ -171,12 +182,12 @@ public enum Analysis {
                 let gap = sample.time.timeIntervalSince(prev.time)
                 if !continues(from: prev.time, to: sample) || value > prev.value
                     || implausible(from: prev.value, to: value, after: gap) {
-                    flush()
+                    flush(disconnect: false)
                 }
             }
             run.append(Reading(time: sample.time, value: value, state: sample.state, wearing: sample.wearing))
         }
-        flush()
+        flush(disconnect: nil)
         return out
     }
 
@@ -226,27 +237,31 @@ public enum Analysis {
     }
 
     /// Finds where the battery collapses, from the latest discharge that started at 40% or more and
-    /// ran down to 5% or less, across the pair's batteries.
+    /// ran empty (2% or less, then the connection ended), across the pair's batteries. A run that
+    /// ended in the case, in a gap or that may still be going doesn't count.
     ///
-    /// The edge is the level after which the rest of that run went fastest compared with how the run
-    /// had been going (the time the earlier pace predicts for the rest, over the time it took). It's
-    /// a cliff when that is 3x or more. Its measured length then replaces the straight-line guess for
-    /// the end of every charge. The latest such run decides, so a battery that stops collapsing (or
-    /// starts) is picked up.
-    public static func chargeCurve(_ samples: [Sample], channels: [Channel]) -> ChargeCurve {
+    /// The edge is the reading after which the rest of that run went fastest compared with how the
+    /// run had been going: the time the earlier pace predicts for the drop seen after it, over the
+    /// time that drop took. It's a cliff when that is 3x or more over at least 5 points. Its measured
+    /// length then replaces the straight-line guess for the end of every charge. The latest such run
+    /// decides, so a battery that stops collapsing (or starts) is picked up.
+    public static func chargeCurve(_ samples: [Sample], channels: [Channel], now: Date) -> ChargeCurve {
         var latest: (end: Date, curve: ChargeCurve)?
         for channel in channels {
-            for run in runs(samples, channel: channel) where run[0].value >= 40 && run.last!.value <= 5 {
-                let end = run.last!.time
-                guard end > latest?.end ?? .distantPast else { continue }
+            for run in runs(samples, channel: channel) {
+                let r = run.readings
+                let end = r.last!.time
+                let closed = run.endedByDisconnect ?? (now.timeIntervalSince(end) > maxGap)
+                guard closed, r[0].value >= 40, r.last!.value <= 2, end > latest?.end ?? .distantPast else { continue }
                 var best: (ratio: Double, edge: Int, hours: Double)?
-                for i in run.indices.dropFirst() where run[i].value <= 40 && run[i].value < run[i - 1].value {
-                    let pace = Double(run[0].value - run[i].value) / (run[i].time.timeIntervalSince(run[0].time) / 3600)
-                    let rest = end.timeIntervalSince(run[i].time) / 3600
-                    let ratio = Double(run[i].value) / pace / max(rest, 1.0 / 60)
-                    if run[0].value - run[i].value >= 5, ratio > best?.ratio ?? 0 {
-                        best = (ratio, run[i].value, rest)
-                    }
+                for i in r.indices.dropFirst() where r[i].value <= 40 && r[i].value < r[i - 1].value {
+                    let before = r[i].time.timeIntervalSince(r[0].time) / 3600
+                    let rest = end.timeIntervalSince(r[i].time) / 3600
+                    let dropBefore = Double(r[0].value - r[i].value)
+                    let dropAfter = Double(r[i].value - r.last!.value)
+                    guard before > 0, rest > 0, dropBefore >= 5, dropAfter >= 5 else { continue }
+                    let ratio = dropAfter / (dropBefore / before) / rest
+                    if ratio > best?.ratio ?? 0 { best = (ratio, r[i].value, rest) }
                 }
                 let curve = best.map { $0.ratio >= 3 ? ChargeCurve(cliff: $0.edge, cliffHours: $0.hours) : .flat }
                 latest = (end, curve ?? .flat)

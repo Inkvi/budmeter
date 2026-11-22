@@ -608,7 +608,7 @@ private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
     #expect(rep.verdict == .worn)
 
     // At 25% only the steep part is left: minutes, not the 1h15m a straight line would give.
-    let curve = Analysis.chargeCurve(samples, channels: [.main])
+    let curve = Analysis.chargeCurve(samples, channels: [.main], now: t)
     #expect(curve.hoursLeft(from: 25, rate: rep.drain[.listening]!.ratePerHour!) < 0.25)
 }
 
@@ -709,4 +709,30 @@ private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
     let rep = DeviceReport.build(device: device(), samples: samples, now: t)
     #expect((26...29).contains(rep.fastDrainBelow ?? 0))
     #expect(rep.verdict == .worn)
+}
+
+@Test func onlyARealCollapseToEmptyCounts() {
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    // A steady drain from 49% all the way to 1%: no cliff, even though the last step is the end.
+    session(&samples, &t, from: 49, to: 1) { _ in 3 }
+    #expect(Analysis.chargeCurve(samples, channels: [.main], now: t).cliff == nil)
+
+    // A real collapse to empty sets one...
+    session(&samples, &t, from: 49, to: 1, minutesPerPercent: cliff)
+    let found = Analysis.chargeCurve(samples, channels: [.main], now: t)
+    #expect((28...31).contains(found.cliff ?? 0))
+
+    // ...and a later run that went into the case at 2% doesn't clear it.
+    var level = 45
+    var first = true
+    while level > 2 {
+        samples.append(s(t, main: level, .listening, start: first))
+        first = false
+        level -= 1
+        t += 180
+    }
+    samples.append(s(t, main: 2, .idle, inCase: true))
+    t += 3600
+    #expect(Analysis.chargeCurve(samples, channels: [.main], now: t) == found)
 }

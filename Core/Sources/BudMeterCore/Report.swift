@@ -81,12 +81,14 @@ extension DeviceReport {
         // Analyze every battery that has data. Galaxy Buds report one level for the pair (always) and
         // each bud (when Samsung's channel is available), so they get all three series.
         let channels = Channel.allCases.filter { ch in samples.contains { $0.value(ch) != nil } }
-        let measured = Dictionary(uniqueKeysWithValues: channels.map { ($0, Analysis.intervals(samples, channel: $0)) })
-        // The cliff comes from all history and all of the pair's batteries: it's only seen when the
-        // earbuds are used until they die, which is rare. Readings inside it say nothing about the
-        // normal drain rate, so they're left out of it; the curve adds the cliff's time back.
-        let curve = Analysis.chargeCurve(samples, channels: channels)
-        let all = measured.mapValues { $0.filter { !curve.contains(level: $0.level) } }
+        // The collapse at the end of a charge comes from all history and all of the pair's batteries:
+        // it's only seen when the earbuds are used until they die, which is rare. Readings inside it
+        // say nothing about how fast each activity drains, so the rates are measured above it and
+        // the curve adds its measured time back.
+        let curve = Analysis.chargeCurve(samples, channels: channels, now: now)
+        let all = Dictionary(uniqueKeysWithValues: channels.map {
+            ($0, Analysis.intervals(samples, channel: $0, above: curve.cliff))
+        })
         func shaped(_ byChannel: [Channel: [UsageState: StateDrain]]) -> [Channel: [UsageState: StateDrain]] {
             byChannel.mapValues { byState in
                 byState.mapValues { d in
