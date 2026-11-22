@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         default: break
         }
+        _ = Updater.shared
         // Belt and braces: never block a shutdown or logout.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification,
                                                           object: nil, queue: .main) { _ in

@@ -43,7 +43,10 @@ struct DashboardView: View {
             NSApp.setActivationPolicy(.regular)
             DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
         }
-        .onDisappear { NSApp.setActivationPolicy(.accessory) }
+        .onDisappear {
+            NSApp.setActivationPolicy(.accessory)
+            Updater.shared.dashboardClosed()
+        }
         .onChange(of: monitor.reports.map(\.device.address)) { selectDefault() }
         .onChange(of: selection) { selectDefault() }
         .frame(minWidth: 820, minHeight: 600)

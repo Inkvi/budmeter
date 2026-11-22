@@ -19,6 +19,8 @@ Get the **BudMeter-<version>.dmg** file from the [latest release](https://github
 
 On first launch macOS asks for Bluetooth access, which BudMeter needs to read battery levels. Click the earbuds icon in the menu bar, then the gear button, and turn on **Open at login** to keep it running in the background.
 
+BudMeter updates itself. Once a day it checks for a new release, downloads it in the background and restarts on the new version (or waits until you close the dashboard). The gear button also has **Check for Updates…**. Version 1.0.0 doesn't have this yet, so download 1.1.0 or later once by hand.
+
 ## Build from source
 
 Requires Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
@@ -70,17 +72,17 @@ open --env BUDMETER_DB=/tmp/budmeter-demo.sqlite build/Build/Products/Debug/BudM
 
 Add `--env BUDMETER_APPEARANCE=dark` (or `light`) to check one appearance without changing the system setting.
 
-To publish a release (needs a Developer ID certificate and notarization credentials stored with `xcrun notarytool store-credentials`):
+To publish a release you need a Developer ID certificate, notarization credentials stored with `xcrun notarytool store-credentials`, and the update signing key in the keychain (created once with `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account budmeter`; its public half is `SUPublicEDKey` in `project.yml`):
 
 ```sh
 NOTARY_PROFILE=<profile> scripts/release.sh 1.0.1
 ```
 
-It builds with the hardened runtime, notarizes and staples the app and the DMG, and uploads `BudMeter-<version>.dmg` to a GitHub release. Use `PUBLISH=0` to build without releasing.
+It builds with the hardened runtime, notarizes and staples the app and the DMG, and uploads `BudMeter-<version>.dmg` and `appcast.xml` to a GitHub release. Installed copies read `appcast.xml` from the latest release to find updates, using [Sparkle](https://sparkle-project.org). Use `PUBLISH=0` to build without releasing.
 
 Layout:
 
 - `design/icon-artwork.png`: source art for the app icon; `swift scripts/make-icon.swift` turns it into the icon set.
 - `design/devices/`: a picture per earbud family (33 of them: AirPods and Beats, Galaxy Buds, Pixel Buds, Sony, Nothing and CMF, Bose, Jabra, Sennheiser, OnePlus, Soundcore, Shokz, Huawei, plus generic earbuds and headphones); `swift scripts/make-device-images.swift` trims them into the asset catalog. `EarbudModel.swift` maps device names and Apple product IDs to a family.
 - `Core/`: Swift package with the models, SQLite store and all analysis (`Analysis.swift`, `Report.swift`), plus tests.
-- `App/`: the menu bar app. `Bluetooth.swift` (IOBluetooth and CoreAudio), `GalaxyBuds.swift` (Samsung channel), `Monitor.swift` (polling and recording), `Views/`.
+- `App/`: the menu bar app. `Bluetooth.swift` (IOBluetooth and CoreAudio), `GalaxyBuds.swift` (Samsung channel), `Monitor.swift` (polling and recording), `Updater.swift` (automatic updates), `Views/`.
