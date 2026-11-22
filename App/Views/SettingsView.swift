@@ -20,10 +20,19 @@ struct SettingsView: View {
                 Text("Read each Galaxy Bud separately")
                 Text("Adds each bud's battery, the case and in-ear status. Turn off if Galaxy Wearable on your phone has trouble connecting.")
             }
+            LabeledContent {
+                Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+                    .disabled(!Updater.isEnabled)
+            } label: {
+                Text("Version \(Self.version)")
+                Text(Updater.isEnabled ? "Updates install automatically." : "Built from source, so it doesn't update itself.")
+            }
         }
         .formStyle(.grouped)
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
     }
+
+    private static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
 }

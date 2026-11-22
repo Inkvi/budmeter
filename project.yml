@@ -5,6 +5,9 @@ options:
 packages:
   BudMeterCore:
     path: Core
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.1
 targets:
   BudMeter:
     type: application
@@ -12,6 +15,7 @@ targets:
     sources: [App]
     dependencies:
       - package: BudMeterCore
+      - package: Sparkle
       - sdk: IOBluetooth.framework
     info:
       path: App/Info.plist
@@ -21,12 +25,18 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.utilities
+        SUFeedURL: $(SPARKLE_FEED_URL)
+        SUPublicEDKey: fZuaZPJ0OB/z1FLNBU8YtfTOgzd3ZasFZQ/UfCX3r/Q=
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: true
         NSBluetoothAlwaysUsageDescription: BudMeter reads the battery level of your connected earbuds to track how their battery wears over time.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.budmeter.BudMeter
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
+        # Empty for local builds so they never replace themselves; scripts/release.sh sets it.
+        SPARKLE_FEED_URL: ""
         SWIFT_VERSION: "6.0"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         CODE_SIGN_IDENTITY: "-"

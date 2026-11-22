@@ -5,12 +5,16 @@
 #
 # Needs a "Developer ID Application" certificate in the keychain and notarization credentials
 # stored with `xcrun notarytool store-credentials <profile> --key ... --key-id ... --issuer ...`.
-# Set PUBLISH=0 to build and notarize without creating the GitHub release.
+# Update signing needs the Sparkle key in the keychain (created once with Sparkle's
+# `generate_keys --account budmeter`). Set PUBLISH=0 to build and notarize without creating the
+# GitHub release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: NOTARY_PROFILE=<profile> scripts/release.sh <version, e.g. 1.0.0>}"
 : "${NOTARY_PROFILE:?set NOTARY_PROFILE to your notarytool keychain profile}"
+# Sparkle only installs a release whose build number is higher than the installed one. The build
+# number is the commit count, so release each version from a newer commit on main.
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD)}"
 TEAM_ID="${TEAM_ID:-$(security find-identity -v -p codesigning | sed -n 's/.*"Developer ID Application: .*(\([A-Z0-9]*\))".*/\1/p' | head -1)}"
 [ -n "$TEAM_ID" ] || { echo "No Developer ID Application certificate found"; exit 1; }
@@ -24,8 +28,18 @@ xcodegen generate --quiet
 xcodebuild -project BudMeter.xcodeproj -scheme BudMeter -configuration Release -derivedDataPath "$OUT" -quiet \
   -destination 'generic/platform=macOS' ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  SPARKLE_FEED_URL="https://github.com/Inkvi/budmeter/releases/latest/download/appcast.xml" \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$TEAM_ID" \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO ENABLE_HARDENED_RUNTIME=YES OTHER_CODE_SIGN_FLAGS="--timestamp" build
+# Sparkle's helper programs come signed by the Sparkle project. Notarization needs them signed by us
+# with the hardened runtime, inside out, and then the app again.
+SIGN=(codesign --force --sign "Developer ID Application" --options runtime --timestamp)
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+"${SIGN[@]}" "$SPARKLE/XPCServices/Installer.xpc"
+"${SIGN[@]}" --preserve-metadata=entitlements "$SPARKLE/XPCServices/Downloader.xpc"
+"${SIGN[@]}" "$SPARKLE/Autoupdate" "$SPARKLE/Updater.app"
+"${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
+"${SIGN[@]}" "$APP"
 codesign --verify --deep --strict --verbose=1 "$APP"
 lipo -archs "$APP/Contents/MacOS/BudMeter"
 if codesign -d --entitlements - "$APP" 2>/dev/null | grep -q get-task-allow; then
@@ -55,7 +69,37 @@ xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 echo "Built $DMG"
 
+# The update feed installed copies check. It's uploaded with each release, so the
+# releases/latest/download/appcast.xml link in Info.plist always points at the newest one.
+# The signature uses the key `generate_keys --account budmeter` saved in the keychain. sign_update
+# can't read that keychain item without a prompt, so generate_keys (which created it) exports it to
+# a temporary file first.
+SPARKLE_BIN="$OUT/SourcePackages/artifacts/sparkle/Sparkle/bin"
+KEY_DIR=$(mktemp -d)
+trap 'rm -rf "$KEY_DIR"' EXIT
+"$SPARKLE_BIN/generate_keys" --account budmeter -x "$KEY_DIR/key" >/dev/null
+SIGNATURE=$("$SPARKLE_BIN/sign_update" --ed-key-file "$KEY_DIR/key" "$DMG")
+rm -rf "$KEY_DIR"
+[[ "$SIGNATURE" == sparkle:edSignature=* ]] || { echo "Signing the update failed: $SIGNATURE"; exit 1; }
+cat > "$OUT/appcast.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>BudMeter</title>
+    <item>
+      <title>$VERSION</title>
+      <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+      <sparkle:version>$BUILD_NUMBER</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/Inkvi/budmeter/releases/download/v$VERSION/BudMeter-$VERSION.dmg" $SIGNATURE type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
+XML
+echo "Wrote $OUT/appcast.xml"
+
 if [ "${PUBLISH:-1}" = "1" ]; then
-  gh release create "v$VERSION" "$DMG" --title "BudMeter $VERSION" --target "$(git rev-parse HEAD)" \
+  gh release create "v$VERSION" "$DMG" "$OUT/appcast.xml" --title "BudMeter $VERSION" --target "$(git rev-parse HEAD)" \
     --notes "Download **BudMeter-$VERSION.dmg**, open it and drag BudMeter to Applications. Requires macOS 14 or later. The app is signed with a Developer ID and notarized by Apple."
 fi

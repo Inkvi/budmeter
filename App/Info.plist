@@ -26,5 +26,13 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>BudMeter reads the battery level of your connected earbuds to track how their battery wears over time.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>$(SPARKLE_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>fZuaZPJ0OB/z1FLNBU8YtfTOgzd3ZasFZQ/UfCX3r/Q=</string>
 </dict>
 </plist>
