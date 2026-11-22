@@ -13,8 +13,8 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: NOTARY_PROFILE=<profile> scripts/release.sh <version, e.g. 1.0.0>}"
 : "${NOTARY_PROFILE:?set NOTARY_PROFILE to your notarytool keychain profile}"
-# Sparkle only installs a release whose build number is higher than the installed one. The commit
-# count grows with every commit on main; set BUILD_NUMBER to re-release from the same commit.
+# Sparkle only installs a release whose build number is higher than the installed one. The build
+# number is the commit count, so release each version from a newer commit on main.
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD)}"
 TEAM_ID="${TEAM_ID:-$(security find-identity -v -p codesigning | sed -n 's/.*"Developer ID Application: .*(\([A-Z0-9]*\))".*/\1/p' | head -1)}"
 [ -n "$TEAM_ID" ] || { echo "No Developer ID Application certificate found"; exit 1; }

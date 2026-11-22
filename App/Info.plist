@@ -31,7 +31,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/Inkvi/budmeter/releases/latest/download/appcast.xml</string>
+	<string>$(SPARKLE_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>fZuaZPJ0OB/z1FLNBU8YtfTOgzd3ZasFZQ/UfCX3r/Q=</string>
 </dict>
