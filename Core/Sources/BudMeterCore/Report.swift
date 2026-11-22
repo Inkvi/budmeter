@@ -81,10 +81,19 @@ extension DeviceReport {
         // Analyze every battery that has data. Galaxy Buds report one level for the pair (always) and
         // each bud (when Samsung's channel is available), so they get all three series.
         let channels = Channel.allCases.filter { ch in samples.contains { $0.value(ch) != nil } }
-        let all = Dictionary(uniqueKeysWithValues: channels.map { ($0, Analysis.intervals(samples, channel: $0)) })
+        let measured = Dictionary(uniqueKeysWithValues: channels.map { ($0, Analysis.intervals(samples, channel: $0)) })
         // The shape of the charge comes from all history: the steep end is only seen when the
-        // earbuds are used until they die, which is rare.
-        let curves = all.mapValues(Analysis.chargeCurve)
+        // earbuds are used until they die, which is rare. Every interval then carries the curve's
+        // speed at its level, so a window that only saw the middle of the charge still gets the
+        // right full-charge runtime.
+        let curves = measured.mapValues(Analysis.chargeCurve)
+        let all = Dictionary(uniqueKeysWithValues: measured.map { ch, list in
+            (ch, list.map { interval in
+                var interval = interval
+                interval.speed = curves[ch]?.speed(at: interval.level) ?? 1
+                return interval
+            })
+        })
         func shaped(_ byChannel: [Channel: [UsageState: StateDrain]]) -> [Channel: [UsageState: StateDrain]] {
             Dictionary(uniqueKeysWithValues: byChannel.map { ch, byState in
                 (ch, byState.mapValues { d in
@@ -197,8 +206,8 @@ extension DeviceReport {
                 // Skip a bud that is charging (level went up since its previous reading).
                 if let previous = samples.dropLast().last(where: { $0.value(ch) != nil })?.value(ch),
                    level > previous { return nil }
-                let rate = drainByChannel[ch]?[latest.state]?.ratePerHour
-                    ?? drain[latest.state]?.ratePerHour ?? mixed.ratePerHour
+                let rate = drainByChannel[ch]?[latest.state]?.referenceRate
+                    ?? drain[latest.state]?.referenceRate ?? mixed.referenceRate
                 return rate.map { (curves[ch] ?? .flat).hoursLeft(from: Double(level), rate: $0) }
             }.min()
         }
@@ -215,7 +224,8 @@ extension DeviceReport {
             connectedHoursLast30Days: Analysis.connectedHours(last30),
             health: health, verdict: verdict, trend: trend, listeningMinutesPerMonth: minutesPerMonth,
             rightVsLeft: rightVsLeft, trackedCycles: trackedCycles, remainingHours: remaining,
-            fastDrainBelow: curves.values.compactMap(\.fastBelow).max())
+            fastDrainBelow: drainByChannel.first { $0.value[.listening] == drain[.listening] }
+                .flatMap { curves[$0.key]?.fastBelow })
     }
 
     /// Batteries shown to the user: each bud when the latest reading has them, else the single level.
@@ -236,7 +246,7 @@ extension DeviceReport {
         return fastest(candidates) ?? candidates.max { $0.hours < $1.hours } ?? StateDrain()
     }
 
-    /// The battery with the highest overall drain rate, among those with comparable evidence.
+    /// The battery that runs out soonest overall, among those with comparable evidence.
     private static func worstChannel(_ byChannel: [Channel: [UsageState: StateDrain]]) -> Channel? {
         let totals = byChannel.mapValues { total($0) }
         if let best = fastest(Array(totals.values)) {
@@ -248,7 +258,8 @@ extension DeviceReport {
     private static func fastest(_ candidates: [StateDrain]) -> StateDrain? {
         let enough = candidates.filter(\.hasEnoughData)
         let maxDrop = enough.map(\.drop).max() ?? 0
-        return enough.filter { $0.drop >= 0.25 * maxDrop }.max { ($0.ratePerHour ?? 0) < ($1.ratePerHour ?? 0) }
+        return enough.filter { $0.drop >= 0.25 * maxDrop }
+            .min { ($0.fullChargeHours ?? .infinity) < ($1.fullChargeHours ?? .infinity) }
     }
 
     private static func total(_ byState: [UsageState: StateDrain]?) -> StateDrain {

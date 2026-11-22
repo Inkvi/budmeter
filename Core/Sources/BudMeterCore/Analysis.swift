@@ -10,6 +10,10 @@ public struct DrainInterval: Sendable, Equatable {
     public var wearing: Bool?
     /// Battery level in the middle of the step-to-step span this piece belongs to.
     public var level: Double = 50
+    /// True for the first piece of each step-to-step span, so spans can be counted.
+    public var firstOfSpan = false
+    /// How fast the charge curve says this level drains, relative to the reference rate (1 = flat).
+    public var speed: Double = 1
 }
 
 /// Battery lost over a period of time in one usage state.
@@ -17,12 +21,16 @@ public struct StateDrain: Sendable, Equatable {
     public var hours: Double
     public var drop: Double
 
+    /// Hours weighted by the charge curve's speed at each level: the time a battery draining at the
+    /// reference rate would have needed for the same drop. Equals `hours` for a flat curve.
+    public var curveHours: Double
     /// Share of a straight-line full charge the battery really delivers (see `ChargeCurve.usable`).
     public var usable: Double
 
-    public init(hours: Double = 0, drop: Double = 0, usable: Double = 1) {
+    public init(hours: Double = 0, drop: Double = 0, curveHours: Double? = nil, usable: Double = 1) {
         self.hours = hours
         self.drop = drop
+        self.curveHours = curveHours ?? hours
         self.usable = usable
     }
 
@@ -33,8 +41,11 @@ public struct StateDrain: Sendable, Equatable {
     public var hasEnoughData: Bool { hours >= Self.minHours && drop >= Self.minDrop }
     /// Percent per hour, nil until there is enough data.
     public var ratePerHour: Double? { hasEnoughData ? drop / hours : nil }
-    /// How long a full 100% charge lasts at this rate, following the battery's charge curve.
-    public var fullChargeHours: Double? { ratePerHour.map { 100 / $0 * usable } }
+    /// Drain rate at the charge curve's reference speed. Unlike `ratePerHour` it doesn't depend on
+    /// which part of the charge the time was spent in.
+    public var referenceRate: Double? { hasEnoughData && curveHours > 0 ? drop / curveHours : nil }
+    /// How long a full 100% charge lasts, following the battery's charge curve.
+    public var fullChargeHours: Double? { referenceRate.map { 100 / $0 * usable } }
 
     public var confidence: Confidence {
         switch drop {
@@ -47,10 +58,13 @@ public struct StateDrain: Sendable, Equatable {
     mutating func add(_ interval: DrainInterval) {
         hours += interval.hours
         drop += interval.drop
+        curveHours += interval.hours * interval.speed
     }
 
     public static func + (a: StateDrain, b: StateDrain) -> StateDrain {
-        StateDrain(hours: a.hours + b.hours, drop: a.drop + b.drop, usable: min(a.usable, b.usable))
+        // Both sides come from the same battery, so they share one curve; an empty side has none.
+        StateDrain(hours: a.hours + b.hours, drop: a.drop + b.drop, curveHours: a.curveHours + b.curveHours,
+                   usable: a.hours > 0 ? a.usable : b.usable)
     }
 }
 
@@ -64,6 +78,10 @@ public struct ChargeCurve: Sendable, Equatable {
     public var speed: [Double]
 
     public static let flat = ChargeCurve(speed: Array(repeating: 1, count: 10))
+
+    static func band(_ level: Double) -> Int { min(max(Int(level / 10), 0), 9) }
+
+    public func speed(at level: Double) -> Double { speed[Self.band(level)] }
 
     /// Share of a straight-line full charge the battery really lasts. 1 when it drains evenly.
     public var usable: Double { speed.reduce(0) { $0 + 1 / $1 } / 10 }
@@ -124,7 +142,8 @@ public enum Analysis {
                 let level = Double(run[a].value + run[b].value) / 2
                 let pieces = (a..<b).map { i in
                     DrainInterval(start: run[i].time, hours: run[i + 1].time.timeIntervalSince(run[i].time) / 3600,
-                                  drop: 0, state: run[i].state, wearing: run[i].wearing, level: level)
+                                  drop: 0, state: run[i].state, wearing: run[i].wearing, level: level,
+                                  firstOfSpan: i == a)
                 }
                 spans.append(Span(pieces: pieces, drop: Double(run[a].value - run[b].value)))
             }
@@ -196,18 +215,22 @@ public enum Analysis {
 
     /// The charge curve measured from `intervals`: in each tenth of the charge, the battery actually
     /// lost compared with what each activity's average rate predicts for the time spent there.
-    /// A tenth with less than `StateDrain.minDrop` measured copies the nearest measured tenth above it
-    /// (or below, at the top): the steep part is at the bottom, so gaps are more like the charge above.
+    /// A tenth counts once it has `StateDrain.minDrop` of drop over at least 3 separate steps, so one
+    /// glitchy reading can't fake a cliff. Others copy the nearest counted tenth above (or below, at
+    /// the top): the steep part is at the bottom, so gaps are more like the charge above.
     public static func chargeCurve(_ intervals: [DrainInterval]) -> ChargeCurve {
         let rates = drain(intervals).mapValues { $0.hours > 0 ? $0.drop / $0.hours : 0 }
         var actual = [Double](repeating: 0, count: 10), expected = actual
+        var spans = [Int](repeating: 0, count: 10)
         for interval in intervals {
-            let band = min(max(Int(interval.level / 10), 0), 9)
+            let band = ChargeCurve.band(interval.level)
             actual[band] += interval.drop
             expected[band] += (rates[interval.state] ?? 0) * interval.hours
+            if interval.firstOfSpan { spans[band] += 1 }
         }
         let measured = (0..<10).map { band -> Double? in
-            actual[band] >= StateDrain.minDrop && expected[band] > 0 ? actual[band] / expected[band] : nil
+            actual[band] >= StateDrain.minDrop && spans[band] >= 3 && expected[band] > 0
+                ? actual[band] / expected[band] : nil
         }
         guard measured.contains(where: { $0 != nil }) else { return .flat }
         return ChargeCurve(speed: measured.indices.map { band in

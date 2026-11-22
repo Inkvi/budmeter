@@ -3,7 +3,7 @@ import Foundation
 import IOBluetooth
 import os
 
-let log = Logger(subsystem: "app.budmeter.BudMeter", category: "monitor")
+nonisolated let log = Logger(subsystem: "app.budmeter.BudMeter", category: "monitor")
 
 /// A paired audio device as currently seen by the Mac.
 struct LiveDevice {
@@ -53,18 +53,37 @@ enum Bluetooth {
         }
         // In a long-running process the device objects stop reporting battery after the first change
         // (they read 0, "unknown"), while a new process still gets the current level. So when a
-        // connected headset has no level, ask a short-lived copy of the app.
+        // connected headset has no level, a short-lived copy of the app reads it in the background,
+        // and this poll uses what the previous copy read, if it's recent.
         if out.contains(where: { $0.isConnected && !$0.hasBattery }) {
-            let fresh = freshLevels()
-            for i in out.indices where out[i].isConnected && !out[i].hasBattery {
-                guard let b = fresh[out[i].address] else { continue }
-                (out[i].main, out[i].left, out[i].right, out[i].caseLevel) = (b.main, b.left, b.right, b.caseLevel)
+            if Date().timeIntervalSince(fresh.time) < 60 {
+                for i in out.indices where out[i].isConnected && !out[i].hasBattery {
+                    guard let b = fresh.levels[out[i].address] else { continue }
+                    (out[i].main, out[i].left, out[i].right, out[i].caseLevel) = (b.main, b.left, b.right, b.caseLevel)
+                }
             }
+            readFreshLevels()
         }
         return out
     }
 
-    struct Levels {
+    /// Levels from the last short-lived copy, and when it read them.
+    private static var fresh: (time: Date, levels: [String: Levels]) = (.distantPast, [:])
+    private static var readingFresh = false
+
+    private static func readFreshLevels() {
+        guard !readingFresh else { return }
+        readingFresh = true
+        Task.detached {
+            let levels = runBatteryCopy()
+            await MainActor.run {
+                fresh = (Date(), levels)
+                readingFresh = false
+            }
+        }
+    }
+
+    struct Levels: Sendable {
         var main, left, right, caseLevel: Int?
     }
 
@@ -90,8 +109,9 @@ enum Bluetooth {
         }
     }
 
-    /// Battery levels read by a new process (this app run with `--battery`). Gives up after 5 seconds.
-    private static func freshLevels() -> [String: Levels] {
+    /// Battery levels read by a new process (this app run with `--battery`). Blocks, so it runs off
+    /// the main thread. Gives up after 5 seconds. The output is a few short lines, so it fits the pipe.
+    nonisolated private static func runBatteryCopy() -> [String: Levels] {
         guard let path = Bundle.main.executablePath else { return [:] }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
@@ -129,13 +149,10 @@ enum Bluetooth {
     }
 
     /// Reads a private battery property. 0 means "unknown" in IOBluetooth, so it maps to nil.
-    /// macOS logs some Galaxy Buds levels as negative ("-16%"). The property is an unsigned byte, so
-    /// that would read 240 here; it's decoded back to 16.
     private static func level(_ device: IOBluetoothDevice, _ key: String) -> Int? {
         guard device.responds(to: NSSelectorFromString(key)),
               let value = device.value(forKey: key) as? Int, value != 0 else { return nil }
         if (1...100).contains(value) { return value }
-        if (156...255).contains(value) { return 256 - value }
         log.notice("Ignored \(key, privacy: .public) = \(value) for \(device.name ?? "?", privacy: .public)")
         return nil
     }
