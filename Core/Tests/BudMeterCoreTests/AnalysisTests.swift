@@ -653,4 +653,21 @@ private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
     let rep = DeviceReport.build(device: device(), samples: samples, now: last.time + 60)
     #expect(rep.fastDrainBelow == nil)
     #expect(abs(rep.drain[.listening]!.fullChargeHours! - 5) < 0.2)
+
+    // Same with the low reading held for two polls (say the activity changed in between).
+    samples.removeLast()
+    samples.append(s(last.time + 30, main: 20, .idle))
+    samples.append(s(last.time + 60, main: 27, .listening))
+    let held = DeviceReport.build(device: device(), samples: samples, now: last.time + 90)
+    #expect(held.fastDrainBelow == nil)
+}
+
+@Test func aReconnectAtAHigherLevelKeepsTheRealDrop() {
+    // 29 -> 27 -> 25 -> 23 at 30-second polls, then a new session reads 24%: the steps were real.
+    let t = Date(timeIntervalSince1970: 1_750_000_000)
+    let samples = [s(t, main: 29, .listening, start: true), s(t + 30, main: 27, .listening),
+                   s(t + 60, main: 25, .listening), s(t + 90, main: 23, .listening),
+                   s(t + 120, main: 24, .listening, start: true)]
+    let drop = Analysis.intervals(samples, channel: .main).reduce(0) { $0 + $1.drop }
+    #expect(drop == 4)   // 27 -> 25 -> 23: the first observed step to the last
 }

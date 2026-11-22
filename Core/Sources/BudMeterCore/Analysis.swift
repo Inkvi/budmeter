@@ -125,8 +125,8 @@ public enum Analysis {
     /// keeps step size from skewing the rate, and it drops flat time in the charging case.
     ///
     /// A run ends on: a new session (disconnect, sleep, restart) or a gap, a rise in level
-    /// (charging), this bud going into the case, or an implausible jump. A drop that is undone
-    /// within 2 minutes is dropped as a misreading. A sample without a value for this
+    /// (charging), this bud going into the case, or an implausible jump. A drop of 3 or more points
+    /// that is mostly undone within 2 minutes is dropped as a misreading. A sample without a value for this
     /// battery is skipped, not a break: headsets sometimes report nothing for a moment.
     ///
     /// Each step-to-step span is one measurement: we know its total drop, not when inside it the
@@ -158,9 +158,15 @@ public enum Analysis {
             guard let value = sample.value(channel) else { continue }
             if let prev = run.last {
                 let gap = sample.time.timeIntervalSince(prev.time)
-                // A level that drops and comes back within 2 minutes was a misreading: drop it.
-                if value > prev.value, gap < 120, run.count >= 2, prev.value < run[run.count - 2].value {
-                    run.removeLast()
+                // A level that drops at least 3 points and wins back at least half of that within
+                // 2 minutes, in the same connection, was a misreading: drop the low readings.
+                let low = run.lastIndex { $0.value != prev.value }.map { $0 + 1 } ?? 0
+                if continues(from: prev.time, to: sample), low > 0, value > prev.value {
+                    let dip = run[low - 1].value - prev.value
+                    if dip >= 3, 2 * (value - prev.value) >= dip,
+                       sample.time.timeIntervalSince(run[low].time) < 120 {
+                        run.removeSubrange(low...)
+                    }
                 }
                 if !continues(from: prev.time, to: sample) || value > prev.value
                     || implausible(from: prev.value, to: value, after: gap) {
