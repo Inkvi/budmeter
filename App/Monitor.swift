@@ -59,6 +59,8 @@ final class Monitor {
     /// Readings that failed to save; retried on every poll, before new ones.
     @ObservationIgnored private var unsaved = UnsavedSamples()
     @ObservationIgnored private var connectedNow = Set<String>()
+    /// Connected devices without a battery level, so the log notes each one once.
+    @ObservationIgnored private var noBattery = Set<String>()
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var refreshTimer: Timer?
     @ObservationIgnored private var watcher: Bluetooth.ConnectWatcher?
@@ -120,7 +122,10 @@ final class Monitor {
             }
             changed.insert(item.sample.address)
         }
-        if let retryError { errorMessage = "Could not save \(unsaved.items.count) readings: \(retryError)" }
+        if let retryError {
+            errorMessage = "Could not save \(unsaved.items.count) readings: \(retryError)"
+            log.error("Retry failed, \(self.unsaved.items.count) queued: \(String(describing: retryError), privacy: .public)")
+        }
         var live = Bluetooth.scan()
         for i in live.indices where live[i].isConnected && GalaxyBuds.isGalaxyBuds(name: live[i].name) {
             guard galaxyDetail else { continue }
@@ -155,6 +160,7 @@ final class Monitor {
                 } catch {
                     unsaved.add(.init(sample, device: (device.name, device.productID)))
                     errorMessage = "Could not save a reading: \(error)"
+                    log.error("Save failed: \(String(describing: error), privacy: .public)")
                 }
             } else {
                 unsaved.add(.init(sample, device: (device.name, device.productID)))   // older readings wait first
@@ -162,6 +168,12 @@ final class Monitor {
             lastWritten[device.address] = sample
             pending[device.address] = nil
         }
+
+        let silent = Set(live.filter { $0.isConnected && !$0.hasBattery }.map(\.address))
+        for device in live where silent.contains(device.address) && !noBattery.contains(device.address) {
+            log.notice("\(device.name, privacy: .public) is connected but reports no battery level")
+        }
+        noBattery = silent
 
         // Devices that disconnected: end their session.
         let linked = Set(live.filter(\.isConnected).map(\.address))
@@ -247,6 +259,7 @@ final class Monitor {
                 apply(fresh, generation: gen, full: addresses == nil)
             } catch {
                 errorMessage = "Could not read history: \(error)"
+                log.error("Report failed: \(String(describing: error), privacy: .public)")
             }
         }
     }

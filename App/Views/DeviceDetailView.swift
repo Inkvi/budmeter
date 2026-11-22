@@ -182,12 +182,14 @@ private struct HealthHero: View {
 
     /// One short line, only when there's something to act on.
     private var note: String? {
+        let cliff = report.fastDrainBelow.map { "Runs out fast below \($0)%." }
         switch report.verdict {
         case .collecting: return "Needs about 30 minutes of playback with this Mac."
-        case .replace: return "Time to replace them."
-        case .worn: return "Plan a replacement."
+        case .replace: return [cliff, "Time to replace them."].compactMap { $0 }.joined(separator: " ")
+        case .worn: return [cliff, "Plan a replacement."].compactMap { $0 }.joined(separator: " ")
         default: break
         }
+        if let cliff { return cliff }
         if let diff = report.rightVsLeft, abs(diff) >= 0.1 {
             let ratio = diff > 0 ? diff : 1 / (1 + diff) - 1
             return "\(diff > 0 ? "Right" : "Left") bud drains \(Format.percent(ratio)) faster."

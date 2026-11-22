@@ -4,7 +4,6 @@ extension Notification.Name {
     static let openDashboard = Notification.Name("openDashboard")
 }
 
-@main
 struct BudMeterApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var monitor = Monitor()

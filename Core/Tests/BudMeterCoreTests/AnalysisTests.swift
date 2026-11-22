@@ -575,3 +575,99 @@ private func s(_ t: Date, main: Int? = nil, left: Int? = nil, right: Int? = nil,
     #expect(try store.samples(address: "x") == [first, second])
     #expect(try store.devices().map(\.name) == ["Galaxy Buds2 Pro"])   // the device row came back too
 }
+
+/// Polls every 30 seconds while a battery drains from `top` to `bottom`, then leaves a 6-hour gap.
+private func session(_ samples: inout [Sample], _ t: inout Date, from top: Int, to bottom: Int,
+                     minutesPerPercent: (Int) -> Double) {
+    var level = Double(top)
+    var first = true
+    while Int(level.rounded(.up)) > bottom {
+        samples.append(s(t, main: Int(level.rounded(.up)), .listening, start: first))
+        first = false
+        level -= 0.5 / minutesPerPercent(Int(level))
+        t += 30
+    }
+    samples.append(s(t, main: bottom, .listening))
+    t += 6 * 3600
+}
+
+/// Like a worn Galaxy Buds2 Pro: 3 minutes per 1% down to 30%, then 30% -> 1% in 10 minutes.
+private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
+
+@Test func batteryThatCollapsesAtTheEndCountsTheCliff() {
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<3 { session(&samples, &t, from: 90, to: 60, minutesPerPercent: cliff) }
+    session(&samples, &t, from: 35, to: 1, minutesPerPercent: cliff)
+
+    let rep = DeviceReport.build(device: device(), samples: samples, now: t)
+    let hours = rep.drain[.listening]!.fullChargeHours!
+    // Truth: 70% x 3 min + 10 min = 3.67 h. A straight line through all of it said about 4 h.
+    #expect(abs(hours - 3.67) < 0.2)
+    #expect(rep.fastDrainBelow == 30)
+    #expect(rep.verdict == .worn)
+
+    // At 25% only the steep part is left: minutes, not the 1h15m a straight line would give.
+    let curve = Analysis.chargeCurve(Analysis.intervals(samples, channel: .main))
+    #expect(curve.hoursLeft(from: 25, rate: rep.drain[.listening]!.ratePerHour!) < 0.25)
+}
+
+@Test func recentMidChargeUseKeepsTheCliffFromOlderHistory() {
+    // The cliff was seen 40 days ago; the last 30 days only used the middle of the charge. The
+    // recent rate is slower than the all-time one, which must not inflate runtime.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    session(&samples, &t, from: 90, to: 1, minutesPerPercent: cliff)
+    t += 40 * 86400
+    for _ in 0..<4 { session(&samples, &t, from: 90, to: 60, minutesPerPercent: cliff) }
+
+    let rep = DeviceReport.build(device: device(), samples: samples, now: t)
+    #expect(rep.basisDays == 30)
+    #expect(abs(rep.drain[.listening]!.fullChargeHours! - 3.67) < 0.2)
+    // Listening is the only activity, so the real mix is the same runtime.
+    #expect(abs(rep.mixed.fullChargeHours! - rep.drain[.listening]!.fullChargeHours!) < 0.05)
+}
+
+@Test func oneGlitchyStepDoesNotMakeACliff() {
+    // Steady 3 minutes per 1% above 40%, plus one session where a headset reports 40 -> 30 -> 20 -> 30.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<3 { session(&samples, &t, from: 100, to: 40) { _ in 3 } }
+    for (i, level) in [40, 30, 20, 30].enumerated() {
+        samples.append(s(t + Double(i) * 30, main: level, .listening, start: i == 0))
+    }
+    let rep = DeviceReport.build(device: device(), samples: samples, now: t + 120)
+    #expect(rep.fastDrainBelow == nil)
+    // The glitch's 10% still counts as drain (about 4.7 h), but not as a cliff (which gave 3.5 h).
+    #expect(rep.drain[.listening]!.fullChargeHours! > 4.5)
+}
+
+@Test func aDipThatBouncesBackIsAMisreading() {
+    // Steady 3 minutes per 1% from 100% to 27%, except one 30-second reading of 20% at 27%.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<3 { session(&samples, &t, from: 100, to: 27) { _ in 3 } }
+    let last = samples.removeLast()
+    samples.append(s(last.time, main: 20, .listening))
+    samples.append(s(last.time + 30, main: 27, .listening))
+    let rep = DeviceReport.build(device: device(), samples: samples, now: last.time + 60)
+    #expect(rep.fastDrainBelow == nil)
+    #expect(abs(rep.drain[.listening]!.fullChargeHours! - 5) < 0.2)
+
+    // Same with the low reading held for two polls (say the activity changed in between).
+    samples.removeLast()
+    samples.append(s(last.time + 30, main: 20, .idle))
+    samples.append(s(last.time + 60, main: 27, .listening))
+    let held = DeviceReport.build(device: device(), samples: samples, now: last.time + 90)
+    #expect(held.fastDrainBelow == nil)
+}
+
+@Test func aReconnectAtAHigherLevelKeepsTheRealDrop() {
+    // 29 -> 27 -> 25 -> 23 at 30-second polls, then a new session reads 24%: the steps were real.
+    let t = Date(timeIntervalSince1970: 1_750_000_000)
+    let samples = [s(t, main: 29, .listening, start: true), s(t + 30, main: 27, .listening),
+                   s(t + 60, main: 25, .listening), s(t + 90, main: 23, .listening),
+                   s(t + 120, main: 24, .listening, start: true)]
+    let drop = Analysis.intervals(samples, channel: .main).reduce(0) { $0 + $1.drop }
+    #expect(drop == 4)   // 27 -> 25 -> 23: the first observed step to the last
+}
