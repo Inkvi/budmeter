@@ -22,9 +22,10 @@ struct SettingsView: View {
             }
             LabeledContent {
                 Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+                    .disabled(!Updater.isEnabled)
             } label: {
                 Text("Version \(Self.version)")
-                Text("Updates install automatically.")
+                Text(Updater.isEnabled ? "Updates install automatically." : "Built from source, so it doesn't update itself.")
             }
         }
         .formStyle(.grouped)

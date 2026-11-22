@@ -4,6 +4,7 @@ import Sparkle
 /// Keeps BudMeter up to date. Sparkle checks the GitHub releases once a day and downloads a new
 /// version in the background. Sparkle normally installs it when the app quits, but BudMeter rarely
 /// quits, so it installs and relaunches right away instead, or when the dashboard closes if it's open.
+/// Only release builds have a feed URL; local builds never update.
 final class Updater: NSObject {
     static let shared = Updater()
     private var controller: SPUStandardUpdaterController!
@@ -11,12 +12,15 @@ final class Updater: NSObject {
 
     private override init() {
         super.init()
-        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self,
+        controller = SPUStandardUpdaterController(startingUpdater: Self.isEnabled, updaterDelegate: self,
                                                   userDriverDelegate: self)
     }
 
+    static let isEnabled = !(Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? "").isEmpty
+
     func checkForUpdates() {
-        controller.checkForUpdates(nil)
+        // A downloaded update waiting for the dashboard to close blocks new checks, so install it now.
+        if pendingInstall != nil { installPending() } else { controller.checkForUpdates(nil) }
     }
 
     func dashboardClosed() {
@@ -26,12 +30,11 @@ final class Updater: NSObject {
     private func installPending() {
         guard let install = pendingInstall else { return }
         pendingInstall = nil
-        AppDelegate.allowQuit = true
         install()
     }
 
     private var dashboardIsOpen: Bool {
-        NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix("dashboard") == true && $0.isVisible }
+        NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix("dashboard") == true && ($0.isVisible || $0.isMiniaturized) }
     }
 }
 
