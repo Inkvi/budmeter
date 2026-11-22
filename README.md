@@ -10,7 +10,8 @@ For each pair it shows:
 - **Trend**: full-charge runtime week by week, and how many minutes of runtime you lose per month.
 - **Left vs right**: whether one bud drains faster than the other (AirPods, Beats and Galaxy Buds).
 - **Time left right now**: based on the current battery level and what you're doing.
-- **Battery history** chart, colored by activity, and connected time per activity.
+- **Battery history**: a chart of the battery level (the lower bud, since it runs out first) with a row underneath showing when you were listening, on a call or idle, plus connected time per activity.
+- **A picture of each model**, for 33 families from AirPods and Galaxy Buds to Sony, Nothing, Bose and more.
 
 ## Install
 
@@ -20,7 +21,7 @@ Requires Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew inst
 scripts/install.sh
 ```
 
-This builds a release copy, puts it in `/Applications` and starts it. Click the earbuds icon in the menu bar, then tick **Open at login**. To open the dashboard, open BudMeter again from Finder or Spotlight, or use **Open Dashboard** in the menu.
+This builds a release copy, puts it in `/Applications` and starts it. Click the earbuds icon in the menu bar, then the gear button, and turn on **Open at login**. To open the dashboard, open BudMeter again from Finder or Spotlight, or use **Open Dashboard** in the menu.
 
 BudMeter shows in the Dock only while the dashboard is open. Closing the dashboard, ⌘Q and Quit in the Dock all just close the window; BudMeter keeps recording in the menu bar. To quit it completely, use the power button in the menu bar popover.
 
@@ -29,12 +30,12 @@ BudMeter shows in the Dock only while the dashboard is open. Closing the dashboa
 Every 30 seconds BudMeter checks paired headsets:
 
 - **Battery** comes from the same IOBluetooth properties the macOS Bluetooth menu uses: each bud and the case for AirPods and Beats, and one level for the pair from other headsets that report battery over the hands-free profile (Galaxy Buds, Pixel Buds, Bose, Sony and others).
-- **Galaxy Buds** also expose Samsung's own Bluetooth channel. BudMeter listens on it, without writing anything, to get each bud's battery at 1% steps, the case battery and whether each bud is in an ear. You can turn this off on the device's page.
+- **Galaxy Buds** also expose Samsung's own Bluetooth channel. BudMeter listens on it, without writing anything, to get each bud's battery at 1% steps, the case battery and where each bud is (in an ear, out, or in the case). You can turn this off in Settings.
 - **Activity** comes from CoreAudio. An open microphone means a call, an open output stream means listening, and anything else is idle.
 
-Time in the charging case doesn't count as connected time: Galaxy Buds say when both buds are in the case, and for other earbuds a rising battery level marks charging. A reading is saved when anything changes, and every 2 minutes otherwise, to `~/Library/Application Support/BudMeter/budmeter.sqlite`.
+Time in the charging case doesn't count: for Galaxy Buds a bud in the case stops only that bud's measurement, and connected time stops when both are in. For other earbuds a rising battery level marks charging. A reading is saved when anything changes, and every 2 minutes otherwise, to `~/Library/Application Support/BudMeter/budmeter.sqlite`.
 
-**Drain is measured between battery steps.** Many headsets report battery in 10% steps. Measuring from an arbitrary moment would mix in an unknown part of a step, so within each continuous discharge BudMeter only counts the time from the first observed step down to the last. That avoids a bias from the step size. With 10% steps a single estimate is still coarse, so the numbers settle as more sessions are recorded; the confidence dots show how much battery drop each estimate is based on. Charging (level going up), disconnects, gaps over 6 minutes (for example the Mac sleeping) and sudden jumps end a discharge run and are left out.
+**Drain is measured between battery steps.** Many headsets report battery in 10% steps. Measuring from an arbitrary moment would mix in an unknown part of a step, so within each continuous discharge BudMeter only counts the time from the first observed step down to the last. That avoids a bias from the step size. When a step spans several activities, its drop is shared between them in proportion to how fast each one usually drains. With 10% steps a single estimate is still coarse, so the numbers settle as more sessions are recorded. Estimates based on little data are shown dimmed; hover over a number to see how much data it's based on. Charging (level going up), disconnects, app restarts, gaps over 6 minutes (for example the Mac sleeping) and sudden jumps end a discharge run and are left out.
 
 A rate is only shown after at least 30 minutes and a 5% drop in that activity. The health number uses the last 30 days when there is enough listening data, so it reflects the battery as it is now.
 
@@ -44,7 +45,7 @@ A rate is only shown after at least 30 minutes and a 5% drop in that activity. T
 - Some apps keep the audio output open even when silent. That time counts as listening, which is also how the earbuds experience it.
 - Listening drain depends on volume and noise cancelling. Compare trends for the same pair rather than reading too much into one week.
 - The Galaxy Buds channel is not always available. If the phone's Galaxy Wearable app is holding it, BudMeter falls back to one battery level for the pair and tries again every 5 minutes. Putting the buds back in the case and taking them out again usually frees it.
-- Rated hours come from a built-in table (noise cancelling on, where it exists). Change them on the device's page if your model is missing or the number is wrong.
+- Rated hours come from a built-in table (noise cancelling on, where it exists). If your model is missing or the number is wrong, click **Rated** next to the health number to change it.
 
 ## Development
 
