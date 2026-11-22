@@ -13,7 +13,13 @@ For each pair it shows:
 - **Battery history**: a chart of the battery level (the lower bud, since it runs out first) with a row underneath showing when you were listening, on a call or idle, plus connected time per activity.
 - **A picture of each model**, for 33 families from AirPods and Galaxy Buds to Sony, Nothing, Bose and more.
 
-## Install
+## Download
+
+Get the **BudMeter-<version>.dmg** file from the [latest release](https://github.com/Inkvi/budmeter/releases/latest), open it and drag BudMeter to Applications. It needs macOS 14 or later. The app is signed with a Developer ID and notarized by Apple, so it opens without warnings.
+
+On first launch macOS asks for Bluetooth access, which BudMeter needs to read battery levels. Click the earbuds icon in the menu bar, then the gear button, and turn on **Open at login** to keep it running in the background.
+
+## Build from source
 
 Requires Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 
@@ -63,6 +69,14 @@ open --env BUDMETER_DB=/tmp/budmeter-demo.sqlite build/Build/Products/Debug/BudM
 ```
 
 Add `--env BUDMETER_APPEARANCE=dark` (or `light`) to check one appearance without changing the system setting.
+
+To publish a release (needs a Developer ID certificate and notarization credentials stored with `xcrun notarytool store-credentials`):
+
+```sh
+NOTARY_PROFILE=<profile> scripts/release.sh 1.0.1
+```
+
+It builds with the hardened runtime, notarizes and staples the app and the DMG, and uploads `BudMeter-<version>.dmg` to a GitHub release. Use `PUBLISH=0` to build without releasing.
 
 Layout:
 
