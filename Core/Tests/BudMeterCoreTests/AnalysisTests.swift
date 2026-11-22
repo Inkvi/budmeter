@@ -641,3 +641,16 @@ private func cliff(_ level: Int) -> Double { level >= 30 ? 3 : 10.0 / 29 }
     // The glitch's 10% still counts as drain (about 4.7 h), but not as a cliff (which gave 3.5 h).
     #expect(rep.drain[.listening]!.fullChargeHours! > 4.5)
 }
+
+@Test func aDipThatBouncesBackIsAMisreading() {
+    // Steady 3 minutes per 1% from 100% to 27%, except one 30-second reading of 20% at 27%.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    for _ in 0..<3 { session(&samples, &t, from: 100, to: 27) { _ in 3 } }
+    let last = samples.removeLast()
+    samples.append(s(last.time, main: 20, .listening))
+    samples.append(s(last.time + 30, main: 27, .listening))
+    let rep = DeviceReport.build(device: device(), samples: samples, now: last.time + 60)
+    #expect(rep.fastDrainBelow == nil)
+    #expect(abs(rep.drain[.listening]!.fullChargeHours! - 5) < 0.2)
+}
