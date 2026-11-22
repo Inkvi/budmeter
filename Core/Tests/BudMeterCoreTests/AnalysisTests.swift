@@ -575,3 +575,34 @@ private func s(_ t: Date, main: Int? = nil, left: Int? = nil, right: Int? = nil,
     #expect(try store.samples(address: "x") == [first, second])
     #expect(try store.devices().map(\.name) == ["Galaxy Buds2 Pro"])   // the device row came back too
 }
+
+@Test func batteryThatCollapsesAtTheEndCountsTheCliff() {
+    // Like a worn Galaxy Buds2 Pro: 3 minutes per 1% down to 30%, then 30% -> 1% in 10 minutes.
+    var samples: [Sample] = []
+    var t = Date(timeIntervalSince1970: 1_750_000_000)
+    func session(from top: Int, to bottom: Int, minutesPerPercent: (Int) -> Double) {
+        var level = Double(top)
+        var first = true
+        while Int(level.rounded(.up)) > bottom {
+            samples.append(s(t, main: Int(level.rounded(.up)), .listening, start: first))
+            first = false
+            level -= 0.5 / minutesPerPercent(Int(level))   // one poll every 30 seconds
+            t += 30
+        }
+        samples.append(s(t, main: bottom, .listening))
+        t += 6 * 3600
+    }
+    for _ in 0..<3 { session(from: 90, to: 60) { _ in 3 } }
+    session(from: 35, to: 1) { $0 >= 30 ? 3 : 10.0 / 29 }
+
+    let rep = DeviceReport.build(device: device(), samples: samples, now: t)
+    let hours = rep.drain[.listening]!.fullChargeHours!
+    // Truth: 70% x 3 min + 10 min = 3.67 h. A straight line through all of it said about 4 h.
+    #expect(abs(hours - 3.67) < 0.2)
+    #expect(rep.fastDrainBelow == 30)
+    #expect(rep.verdict == .worn)
+
+    // At 25% only the steep part is left: minutes, not the 1h15m a straight line would give.
+    let curve = Analysis.chargeCurve(Analysis.intervals(samples, channel: .main))
+    #expect(curve.hoursLeft(from: 25, rate: rep.drain[.listening]!.ratePerHour!) < 0.25)
+}

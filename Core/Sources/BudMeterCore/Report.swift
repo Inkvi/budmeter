@@ -68,6 +68,8 @@ public struct DeviceReport: Sendable {
     public var trackedCycles: Double
     /// Estimated hours left on the current charge at the current activity.
     public var remainingHours: Double?
+    /// Level below which the battery that dies first drains at least twice as fast as average.
+    public var fastDrainBelow: Int?
 }
 
 extension DeviceReport {
@@ -80,13 +82,25 @@ extension DeviceReport {
         // each bud (when Samsung's channel is available), so they get all three series.
         let channels = Channel.allCases.filter { ch in samples.contains { $0.value(ch) != nil } }
         let all = Dictionary(uniqueKeysWithValues: channels.map { ($0, Analysis.intervals(samples, channel: $0)) })
+        // The shape of the charge comes from all history: the steep end is only seen when the
+        // earbuds are used until they die, which is rare.
+        let curves = all.mapValues(Analysis.chargeCurve)
+        func shaped(_ byChannel: [Channel: [UsageState: StateDrain]]) -> [Channel: [UsageState: StateDrain]] {
+            Dictionary(uniqueKeysWithValues: byChannel.map { ch, byState in
+                (ch, byState.mapValues { d in
+                    var d = d
+                    d.usable = curves[ch]?.usable ?? 1
+                    return d
+                })
+            })
+        }
 
         // Prefer the last 30 days so the numbers reflect the battery as it is now, but only for an
         // activity that has enough recent data. Otherwise fall back to all tracked history.
         let recentCutoff = now.addingTimeInterval(-30 * 86400)
         let recent = all.mapValues { $0.filter { $0.start >= recentCutoff } }
-        let recentDrain = recent.mapValues(Analysis.drain)
-        let allDrain = all.mapValues(Analysis.drain)
+        let recentDrain = shaped(recent.mapValues(Analysis.drain))
+        let allDrain = shaped(all.mapValues(Analysis.drain))
         func useRecent(_ d: StateDrain) -> Bool { d.hasEnoughData && d.drop >= 15 }
 
         var drainByChannel: [Channel: [UsageState: StateDrain]] = [:]
@@ -150,10 +164,10 @@ extension DeviceReport {
             for interval in list { weeks[weekOf(interval.start), default: [:]][ch, default: []].append(interval) }
         }
         let trend = weeks.keys.sorted().map { week -> TrendPoint in
-            let byChannel = weeks[week]!.mapValues(Analysis.drain)
+            let byChannel = shaped(weeks[week]!.mapValues(Analysis.drain))
             let listening = worst(byChannel, .listening).fullChargeHours
-            let mixedRate = worstChannel(byChannel).flatMap { total(byChannel[$0]).ratePerHour }
-            return TrendPoint(weekStart: week, listeningHours: listening, mixedHours: mixedRate.map { 100 / $0 })
+            let mixedHours = worstChannel(byChannel).flatMap { total(byChannel[$0]).fullChargeHours }
+            return TrendPoint(weekStart: week, listeningHours: listening, mixedHours: mixedHours)
         }
         let slopePoints = trend.compactMap { p in p.listeningHours.map { (x: p.weekStart.timeIntervalSince1970 / 86400, y: $0) } }
         let spanDays = (slopePoints.last?.x ?? 0) - (slopePoints.first?.x ?? 0)
@@ -185,7 +199,7 @@ extension DeviceReport {
                    level > previous { return nil }
                 let rate = drainByChannel[ch]?[latest.state]?.ratePerHour
                     ?? drain[latest.state]?.ratePerHour ?? mixed.ratePerHour
-                return rate.map { Double(level) / $0 }
+                return rate.map { (curves[ch] ?? .flat).hoursLeft(from: Double(level), rate: $0) }
             }.min()
         }
 
@@ -200,7 +214,8 @@ extension DeviceReport {
             connectedHoursLast7Days: Analysis.connectedHours(last7),
             connectedHoursLast30Days: Analysis.connectedHours(last30),
             health: health, verdict: verdict, trend: trend, listeningMinutesPerMonth: minutesPerMonth,
-            rightVsLeft: rightVsLeft, trackedCycles: trackedCycles, remainingHours: remaining)
+            rightVsLeft: rightVsLeft, trackedCycles: trackedCycles, remainingHours: remaining,
+            fastDrainBelow: curves.values.compactMap(\.fastBelow).max())
     }
 
     /// Batteries shown to the user: each bud when the latest reading has them, else the single level.

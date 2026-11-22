@@ -45,6 +45,8 @@ Time in the charging case doesn't count: for Galaxy Buds a bud in the case stops
 
 **Drain is measured between battery steps.** Many headsets report battery in 10% steps. Measuring from an arbitrary moment would mix in an unknown part of a step, so within each continuous discharge BudMeter only counts the time from the first observed step down to the last. That avoids a bias from the step size. When a step spans several activities, its drop is shared between them in proportion to how fast each one usually drains. With 10% steps a single estimate is still coarse, so the numbers settle as more sessions are recorded. Estimates based on little data are shown dimmed; hover over a number to see how much data it's based on. Charging (level going up), disconnects, app restarts, gaps over 6 minutes (for example the Mac sleeping) and sudden jumps end a discharge run and are left out.
 
+**Runtime follows the charge curve.** A worn battery often reads normally down to some level and then collapses: the last quarter can go in ten minutes. A straight line from the middle of the charge would miss that, so BudMeter measures how fast each tenth of the charge drains (0 to 10%, 10 to 20% and so on) and adds them up. The steep end only shows up once you've used the earbuds until they died, so the estimates drop then, and the health card says "Runs out fast below 30%".
+
 A rate is only shown after at least 30 minutes and a 5% drop in that activity. The health number uses the last 30 days when there is enough listening data, so it reflects the battery as it is now.
 
 ### Limits
