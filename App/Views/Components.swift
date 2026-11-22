@@ -34,12 +34,12 @@ extension UsageState {
         }
     }
 
-    /// Height of this activity in the battery chart's activity strip (in battery-scale points).
+    /// Height of this activity in the battery chart's activity row (in battery-scale points). Calls are
+    /// a bit taller so they don't depend on color alone.
     var stripHeight: Int {
         switch self {
-        case .call: 13
-        case .listening: 8
-        case .idle: 3
+        case .call: 12
+        case .listening, .idle: 8
         }
     }
 
@@ -197,20 +197,14 @@ struct DeviceImage: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        // The tile has its own gradient and a hairline edge, so it stays visible on the sidebar, a gray
-        // or blue selection, and in dark mode, and white earbuds keep their shading against it.
-        let shape = RoundedRectangle(cornerRadius: size * 0.24)
-        let colors: [Color] = colorScheme == .dark
-            ? [Color(white: 0.30), Color(white: 0.18)]
-            : [Color(white: 0.97), Color(white: 0.84)]
+        // Just the product, like macOS Bluetooth settings. In light mode a faint shadow gives white
+        // earbuds an edge against light backgrounds; dark mode doesn't need it.
         Image(device.model.imageName)
             .resizable()
             .interpolation(.high)
             .scaledToFit()
-            .padding(size * 0.12)
             .frame(width: size, height: size)
-            .background(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom), in: shape)
-            .overlay(shape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0 : 0.28), radius: max(1, size * 0.025), y: size * 0.012)
             .accessibilityHidden(true)
     }
 }

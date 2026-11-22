@@ -375,10 +375,13 @@ private struct LegendItem: View {
     let color: Color
     let text: String
     var dashed = false
+    var line = false
 
     var body: some View {
         HStack(spacing: 5) {
-            if dashed {
+            if line {
+                Capsule().fill(color).frame(width: 14, height: 2.5).frame(height: 10)
+            } else if dashed {
                 Path { p in
                     p.move(to: CGPoint(x: 0, y: 5))
                     p.addLine(to: CGPoint(x: 14, y: 5))
@@ -411,9 +414,10 @@ private struct HistorySection: View {
     private struct Point: Identifiable {
         var time: Date
         var level: Int
-        var series: String
-        var channel: Channel
-        var id: String { "\(series)-\(time.timeIntervalSince1970)" }
+        var series: Int
+        /// The level is the lower of two buds.
+        var twoBuds: Bool
+        var id: Double { time.timeIntervalSince1970 }
     }
 
     var body: some View {
@@ -432,24 +436,25 @@ private struct HistorySection: View {
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 Chart {
-                    ForEach(bands) { band in
-                        RectangleMark(xStart: .value("Start", band.start), xEnd: .value("End", band.end),
-                                      yStart: .value("Low", 0), yEnd: .value("High", 100))
-                            .foregroundStyle(band.state.color.opacity(0.18))
+                    // Battery level: one smooth line with a soft fill, broken where there's no data.
+                    ForEach(points) { p in
+                        AreaMark(x: .value("Time", p.time), yStart: .value("Empty", 0), yEnd: .value("Battery", p.level),
+                                 series: .value("Stretch", p.series))
+                            .foregroundStyle(LinearGradient(colors: [Color.primary.opacity(0.12), Color.primary.opacity(0.02)],
+                                                            startPoint: .top, endPoint: .bottom))
+                            .interpolationMethod(.monotone)
+                        LineMark(x: .value("Time", p.time), y: .value("Battery", p.level),
+                                 series: .value("Stretch", p.series))
+                            .foregroundStyle(Color.primary.opacity(0.75))
+                            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                            .interpolationMethod(.monotone)
                     }
-                    // Activity strip under the plot: height tells activities apart without relying on color.
+                    // Activity row under the plot.
                     ForEach(bands) { band in
                         RectangleMark(xStart: .value("Start", band.start), xEnd: .value("End", band.end),
                                       yStart: .value("Low", Self.stripBottom),
                                       yEnd: .value("High", Self.stripBottom + band.state.stripHeight))
                             .foregroundStyle(band.state.color)
-                    }
-                    ForEach(points) { p in
-                        LineMark(x: .value("Time", p.time), y: .value("Battery", p.level),
-                                 series: .value("Series", p.series))
-                            .foregroundStyle(Color.primary.opacity(0.8))
-                            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: p.channel == .right ? [4, 3] : []))
-                            .interpolationMethod(.stepEnd)
                     }
                 }
                 .chartYScale(domain: Self.stripBottom...100)
@@ -464,6 +469,8 @@ private struct HistorySection: View {
                 .accessibilityLabel("Battery history")
                 .accessibilityValue(historySummary)
                 HStack(spacing: 16) {
+                    LegendItem(color: Color.primary.opacity(0.75),
+                               text: points.contains(where: \.twoBuds) ? "Battery (lower bud)" : "Battery", line: true)
                     ForEach(UsageState.allCases, id: \.self) { s in
                         HStack(spacing: 5) {
                             RoundedRectangle(cornerRadius: 1).fill(s.color)
@@ -471,9 +478,6 @@ private struct HistorySection: View {
                                 .frame(height: 12, alignment: .bottom)
                             Text(s.label).font(.callout).foregroundStyle(Color.secondaryText)
                         }
-                    }
-                    if samples.contains(where: { $0.right != nil }) {
-                        LegendItem(color: .secondary, text: "Right bud", dashed: true)
                     }
                 }
             }
@@ -492,14 +496,15 @@ private struct HistorySection: View {
     /// Spoken summary: the battery range and time per activity, since the bands only show it by color.
     private var historySummary: String {
         let levels = points.map(\.level)
-        guard let high = levels.max(), let low = levels.min() else { return "No readings" }
         // Same bands as the activity strip, so the summary matches what is drawn.
         var hours: [UsageState: Double] = [:]
         for band in bands { hours[band.state, default: 0] += band.end.timeIntervalSince(band.start) / 3600 }
         let activity = UsageState.allCases.compactMap { s in
             hours[s].map { "\(s.label) \(Format.hours($0))" }
         }.joined(separator: ", ")
-        return "Battery between \(low)% and \(high)%. \(activity)"
+        let battery = levels.min().flatMap { low in levels.max().map { "Battery between \(low)% and \($0)%." } }
+        let parts = [battery, activity.isEmpty ? nil : activity].compactMap { $0 }
+        return parts.isEmpty ? "No readings" : parts.joined(separator: " ")
     }
 
     /// Background bands showing what the earbuds were doing, merged across same-state samples.
@@ -516,21 +521,27 @@ private struct HistorySection: View {
         return out
     }
 
-    /// Battery lines: each bud where the reading has them, otherwise the single level. Each line breaks
-    /// at its own gaps and at new sessions, so it never bridges time it has no data for.
+    /// One battery line: the lower bud when both are reported (it runs out first), otherwise the single
+    /// level. A new stretch starts at gaps and new sessions, so the line never bridges missing time.
+    /// Within a stretch only the moments the level changes are kept (plus its first and last reading),
+    /// so the line slopes smoothly instead of drawing a stair-step for every 1% plateau.
     private var points: [Point] {
-        var out: [Point] = []
-        var segment: [Channel: Int] = [:]
-        var previous: [Channel: Date] = [:]
+        var stretches: [[Point]] = []
+        var previous: Date?
         for s in samples {
-            for ch in DeviceReport.displayChannels(s) {
-                guard let v = s.value(ch) else { continue }
-                if let p = previous[ch], !Analysis.continues(from: p, to: s) { segment[ch, default: 0] += 1 }
-                previous[ch] = s.time
-                out.append(Point(time: s.time, level: v, series: "\(ch.rawValue)-\(segment[ch, default: 0])", channel: ch))
+            let levels = DeviceReport.displayChannels(s).compactMap { s.value($0) }
+            guard let level = levels.min() else { continue }
+            if previous == nil || !Analysis.continues(from: previous!, to: s) { stretches.append([]) }
+            previous = s.time
+            stretches[stretches.count - 1].append(Point(time: s.time, level: level, series: stretches.count,
+                                                        twoBuds: levels.count > 1))
+        }
+        // Fragments under 3 minutes (for example an app restart mid-session) would only draw a tick.
+        return stretches.filter { ($0.last?.time.timeIntervalSince($0.first?.time ?? .distantFuture) ?? 0) >= 180 }.flatMap { stretch in
+            stretch.enumerated().compactMap { i, p in
+                i == 0 || i == stretch.count - 1 || p.level != stretch[i - 1].level ? p : nil
             }
         }
-        return out
     }
 }
 
